@@ -1,0 +1,3 @@
+[submodule "external/nrf-hal"]
+	path = external/nrf-hal
+	url = https://github.com/nrf-rs/nrf-hal
