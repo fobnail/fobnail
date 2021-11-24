@@ -1,3 +1,15 @@
+#![no_std]
+
+extern crate nrf52840_hal as hal;
+
+#[macro_use]
+extern crate log;
+
+#[macro_use]
+extern crate rtt_target;
+
+pub extern crate cortex_m_rt;
+
 use core::mem::MaybeUninit;
 
 use cortex_m::interrupt::free;
@@ -8,9 +20,12 @@ use hal::timer::{Instance, Periodic};
 use hal::Clocks;
 use hal::Timer;
 
+pub mod ethernet;
 mod led;
+mod logger;
+mod panic;
 pub mod timer;
-pub mod usb;
+pub(crate) mod usb;
 
 static mut HFOSC: Option<Clocks<ExternalOscillator, Internal, LfOscStopped>> = None;
 
@@ -35,6 +50,9 @@ fn TIMER0() {
 }
 
 pub fn init() {
+    rtt_target::rtt_init_print!();
+    logger::init();
+
     let periph = hal::pac::Peripherals::take().unwrap();
     let clocks = Clocks::new(periph.CLOCK);
     // Enable high frequency (64 MHz) clock, USB needs this

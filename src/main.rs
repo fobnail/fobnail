@@ -1,9 +1,11 @@
-#![no_main]
 #![no_std]
+#![cfg_attr(target_os = "none", no_main)]
 
-extern crate nrf52840_hal as hal;
-#[macro_use]
-extern crate rtt_target;
+#[cfg(target_os = "none")]
+extern crate pal_nrf as pal;
+
+#[cfg(target_os = "linux")]
+extern crate pal_pc as pal;
 
 #[macro_use]
 extern crate log;
@@ -13,21 +15,15 @@ use smoltcp::socket::{SocketSet, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
 
-mod drivers;
-mod logger;
-mod util;
-
-#[cortex_m_rt::entry]
+#[cfg_attr(target_os = "none", pal::cortex_m_rt::entry)]
 fn main() -> ! {
-    rtt_target::rtt_init_print!();
-    logger::init();
-    drivers::init();
+    pal::init();
 
     let mut neighbor_cache_storage: [Option<(IpAddress, Neighbor)>; 16] = [None; 16];
     let neighbor_cache = NeighborCache::new(&mut neighbor_cache_storage[..]);
 
     let mut ip_addrs = [IpCidr::new(IpAddress::v4(169, 254, 0, 1), 16)];
-    let eth_phy = drivers::usb::ethernet::Phy::new(drivers::usb::get_eem_driver());
+    let eth_phy = pal::ethernet::Phy::new(pal::ethernet::get_backend());
     let mut iface = EthernetInterfaceBuilder::new(eth_phy)
         .ethernet_addr(EthernetAddress([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
         .neighbor_cache(neighbor_cache)
@@ -76,6 +72,6 @@ fn main() -> ! {
             Err(e) => error!("UDP recv error: {}", e),
         }
 
-        cortex_m::asm::wfi();
+        //cortex_m::asm::wfi();
     }
 }

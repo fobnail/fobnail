@@ -1,9 +1,14 @@
 use cortex_m::interrupt::{free, Mutex};
+use hal::usbd::{UsbPeripheral, Usbd};
 use smoltcp::phy::{Checksum, ChecksumCapabilities, Device, DeviceCapabilities, RxToken, TxToken};
 use smoltcp::time::Instant;
 use usb_device::bus::UsbBus;
 
-use super::eem::EemDriver;
+use eem::EemDriver;
+
+pub fn get_backend() -> &'static Mutex<EemDriver<'static, Usbd<UsbPeripheral<'static>>>> {
+    crate::usb::get_eem_driver()
+}
 
 pub struct Phy<'a, B>
 where
@@ -70,7 +75,7 @@ impl<'a, B: UsbBus> RxToken for &'a Phy<'_, B> {
             } else {
                 // We should never reach this - PHY driver checks if there is
                 // any incoming packet before creating RxToken
-                rprintln!("BUG! RX token failed to receive Ethernet packet");
+                error!("BUG! RX token failed to receive Ethernet packet");
 
                 return Err(smoltcp::Error::Exhausted);
             }

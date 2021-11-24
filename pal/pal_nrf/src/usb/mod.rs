@@ -6,9 +6,6 @@ use hal::usbd::{UsbPeripheral, Usbd};
 use usb_device::class_prelude::UsbBusAllocator;
 use usb_device::device::{UsbDevice, UsbDeviceBuilder, UsbVidPid};
 
-mod eem;
-pub mod ethernet;
-
 const FOBNAIL_TOKEN_VID: u16 = 0x1234;
 const FOBNAIL_TOKEN_PID: u16 = 0x4321;
 
