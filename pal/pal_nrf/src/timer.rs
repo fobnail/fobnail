@@ -10,7 +10,7 @@ pub type Timer = hal::Timer<TIMER2, OneShot>;
 static mut TIMER: MaybeUninit<Timer> = MaybeUninit::uninit();
 static mut INITIALIZED: bool = false;
 
-pub fn init(timer: Timer) {
+pub(crate) fn init(timer: Timer) {
     let _timer = unsafe {
         TIMER = MaybeUninit::new(timer);
         INITIALIZED = true;
@@ -29,4 +29,16 @@ pub fn delay(duration: Duration) {
                 * Timer::TICKS_PER_SECOND,
         );
     }
+}
+
+/// Returns a measurement of a monotonically nondecreasing clock in
+/// milliseconds.
+pub fn get_time_ms() -> i64 {
+    // TODO: implement this
+    // Smoltcp requires a monotonic clock for timestamps, but so far it works
+    // with a dummy implementation
+    //
+    // Soon this function may (and probably will) be used by other components.
+
+    0
 }

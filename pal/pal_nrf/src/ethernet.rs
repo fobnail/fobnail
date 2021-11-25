@@ -2,12 +2,22 @@ use cortex_m::interrupt::{free, Mutex};
 use hal::usbd::{UsbPeripheral, Usbd};
 use smoltcp::phy::{Checksum, ChecksumCapabilities, Device, DeviceCapabilities, RxToken, TxToken};
 use smoltcp::time::Instant;
+use smoltcp::wire::EthernetAddress;
 use usb_device::bus::UsbBus;
 
 use eem::EemDriver;
 
-pub fn get_backend() -> &'static Mutex<EemDriver<'static, Usbd<UsbPeripheral<'static>>>> {
-    crate::usb::get_eem_driver()
+/// Creates Ethernet PHY which we use with smoltcp
+pub fn create_phy() -> Phy<'static, Usbd<UsbPeripheral<'static>>> {
+    Phy::new(crate::usb::get_eem_driver())
+}
+
+/// Returns MAC address which should be used when building interface using
+/// `EthernetInterfaceBuilder`
+pub fn get_ethernet_address() -> EthernetAddress {
+    // FIXME: every device should have it's own unique address.
+    // Maybe we can derive it from some sort hardware adress stored in nRF chip?
+    EthernetAddress([0x10, 0x20, 0x30, 0x40, 0x50, 0x60])
 }
 
 pub struct Phy<'a, B>

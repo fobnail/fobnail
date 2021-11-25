@@ -13,7 +13,7 @@ extern crate log;
 use smoltcp::iface::{EthernetInterfaceBuilder, Neighbor, NeighborCache};
 use smoltcp::socket::{SocketSet, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
+use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 #[cfg_attr(target_os = "none", pal::cortex_m_rt::entry)]
 fn main() -> ! {
@@ -23,9 +23,9 @@ fn main() -> ! {
     let neighbor_cache = NeighborCache::new(&mut neighbor_cache_storage[..]);
 
     let mut ip_addrs = [IpCidr::new(IpAddress::v4(169, 254, 0, 1), 16)];
-    let eth_phy = pal::ethernet::Phy::new(pal::ethernet::get_backend());
+    let eth_phy = pal::ethernet::create_phy();
     let mut iface = EthernetInterfaceBuilder::new(eth_phy)
-        .ethernet_addr(EthernetAddress([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+        .ethernet_addr(pal::ethernet::get_ethernet_address())
         .neighbor_cache(neighbor_cache)
         .ip_addrs(&mut ip_addrs[..])
         .finalize();
@@ -51,7 +51,12 @@ fn main() -> ! {
     let mut echo_buf = [0u8; 128];
 
     loop {
-        match iface.poll(&mut socket_set, Instant { millis: 0 }) {
+        match iface.poll(
+            &mut socket_set,
+            Instant {
+                millis: pal::timer::get_time_ms(),
+            },
+        ) {
             Ok(true) => {}
             Ok(false) => {}
             Err(e) => {
@@ -72,6 +77,6 @@ fn main() -> ! {
             Err(e) => error!("UDP recv error: {}", e),
         }
 
-        //cortex_m::asm::wfi();
+        pal::cpu_relax();
     }
 }

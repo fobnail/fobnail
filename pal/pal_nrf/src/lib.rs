@@ -91,3 +91,8 @@ pub fn init() {
         NVIC::unmask(Interrupt::USBD);
     }
 }
+
+/// Reduces CPU load by suspending execution till next interrupt arrives.
+pub fn cpu_relax() {
+    cortex_m::asm::wfi();
+}
