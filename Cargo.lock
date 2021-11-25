@@ -106,14 +106,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eem"
-version = "0.1.0"
-dependencies = [
- "log",
- "usb-device",
-]
-
-[[package]]
 name = "embedded-dma"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -294,13 +286,13 @@ version = "0.1.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
- "eem",
  "embedded-hal",
  "log",
  "nrf52840-hal",
  "rtt-target",
  "smoltcp",
  "usb-device",
+ "usbd-ethernet",
 ]
 
 [[package]]
@@ -465,6 +457,16 @@ name = "usb-device"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6be90410d4772074ea49525e2e753b65920b94b57eee21a6ef7b6a6fe6296245"
+
+[[package]]
+name = "usbd-ethernet"
+version = "0.1.0"
+source = "git+https://github.com/arturkow2000/usbd-ethernet#e3132824a62563cfcebcb71a26bb4f223df64bdf"
+dependencies = [
+ "log",
+ "smoltcp",
+ "usb-device",
+]
 
 [[package]]
 name = "vcell"
