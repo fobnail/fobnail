@@ -59,9 +59,7 @@ fn main() -> ! {
         ) {
             Ok(true) => {}
             Ok(false) => {}
-            Err(e) => {
-                error!("smoltcp error: {}", e)
-            }
+            Err(_) => {}
         };
 
         let mut socket = socket_set.get::<UdpSocket>(socket_handle);
