@@ -4,7 +4,7 @@ pub mod ethernet;
 pub mod timer;
 
 pub fn init() {
-    pretty_env_logger::init();
+    pretty_env_logger::init_custom_env("FOBNAIL_LOG");
     timer::init();
 }
 
