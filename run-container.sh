@@ -7,6 +7,5 @@ docker run --privileged \
     -v $dir:/home/build/nrf-hal \
     -v /dev:/dev \
     -w /home/build/nrf-hal \
-    --privileged \
     --net=host \
     3mdeb/fobnail-sdk /bin/bash
