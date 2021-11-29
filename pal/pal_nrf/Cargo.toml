@@ -11,9 +11,9 @@ rtt-target = { version = "0.3.1", features = ["cortex-m"] }
 cortex-m = "0.7.3"
 cortex-m-rt = "0.7.0"
 usb-device = "0.2.8"
-# TODO: should use fobnail's repo or ideally should fetch from crates.io when
-# crate gets published
-usbd-ethernet = { git = "https://github.com/arturkow2000/usbd-ethernet", features = ["smoltcp_integration", "logging"] }
+# TODO: after this crate gets published, it should be fetched from crates.io
+# instead of git
+usbd-ethernet = { git = "https://github.com/fobnail/usbd-ethernet", features = ["smoltcp_integration", "logging"] }
 
 smoltcp = { version = "0.7.5", default-features = false, features = ["proto-ipv4", "socket-udp", "ethernet", "log"] }
 log = { version = "0.4", default-features = false }
