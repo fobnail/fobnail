@@ -81,10 +81,13 @@ full_cmd="cargo ${cargo_command} --target ${cargo_target} ${cargo_release_flag} 
 
 dir=$(dirname $(readlink -f ${BASH_SOURCE[0]}))
 
+mkdir -p $dir/.temp/cargo
+
 docker run --privileged \
     --rm -it \
     -v $dir:/home/build/nrf-hal \
     -v /dev:/dev \
+    -v $dir/.temp/cargo:/home/build/.cargo \
     -w /home/build/nrf-hal \
     --net=host \
     3mdeb/fobnail-sdk \
