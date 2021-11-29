@@ -89,6 +89,7 @@ docker run --privileged \
     -v /dev:/dev \
     -v $dir/.temp/cargo:/home/build/.cargo \
     -w /home/build/fobnail \
+    -e FOBNAIL_LOG=$FOBNAIL_LOG \
     --net=host \
     3mdeb/fobnail-sdk \
     /bin/bash -i -c "${full_cmd}"
