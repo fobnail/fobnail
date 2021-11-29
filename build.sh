@@ -85,10 +85,10 @@ mkdir -p $dir/.temp/cargo
 
 docker run --privileged \
     --rm -it \
-    -v $dir:/home/build/nrf-hal \
+    -v $dir:/home/build/fobnail \
     -v /dev:/dev \
     -v $dir/.temp/cargo:/home/build/.cargo \
-    -w /home/build/nrf-hal \
+    -w /home/build/fobnail \
     --net=host \
     3mdeb/fobnail-sdk \
     /bin/bash -i -c "${full_cmd}"
