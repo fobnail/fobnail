@@ -14,3 +14,4 @@ pal_pc = { path = "pal/pal_pc" }
 [dependencies]
 smoltcp = { version = "0.7.5", default-features = false, features = ["proto-ipv4", "socket-udp", "ethernet", "log"] }
 log = { version = "0.4", default-features = false, features = ["max_level_trace"] }
+coap-lite = { version = "0.7", default-features = false }

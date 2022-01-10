@@ -74,6 +74,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "coap-lite"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2911526fe9fc3bb90ff13ff52bd5454e93da0685ba8ed105f06bfc0e898fd950"
+
+[[package]]
 name = "cortex-m"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -159,6 +165,7 @@ dependencies = [
 name = "fobnail"
 version = "0.1.0"
 dependencies = [
+ "coap-lite",
  "log",
  "pal_nrf",
  "pal_pc",
@@ -461,7 +468,7 @@ checksum = "6be90410d4772074ea49525e2e753b65920b94b57eee21a6ef7b6a6fe6296245"
 [[package]]
 name = "usbd-ethernet"
 version = "0.1.0"
-source = "git+https://github.com/arturkow2000/usbd-ethernet#e3132824a62563cfcebcb71a26bb4f223df64bdf"
+source = "git+https://github.com/fobnail/usbd-ethernet#be11751094082cc92c56a5e760bf8c94c7db9fc8"
 dependencies = [
  "log",
  "smoltcp",
