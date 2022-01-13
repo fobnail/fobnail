@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(alloc_error_handler)]
 
 extern crate nrf52840_hal as hal;
 
@@ -21,6 +22,7 @@ use hal::Clocks;
 use hal::Timer;
 
 pub mod ethernet;
+mod heap;
 mod led;
 mod logger;
 mod panic;
@@ -52,6 +54,7 @@ fn TIMER0() {
 pub fn init() {
     rtt_target::rtt_init_print!();
     logger::init();
+    heap::init();
 
     let periph = hal::pac::Peripherals::take().unwrap();
     let clocks = Clocks::new(periph.CLOCK);
