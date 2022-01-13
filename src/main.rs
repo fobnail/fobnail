@@ -10,29 +10,33 @@ extern crate pal_pc as pal;
 #[macro_use]
 extern crate log;
 
+#[macro_use]
+extern crate alloc;
+
+use coap_lite::CoapRequest;
 use smoltcp::iface::{EthernetInterfaceBuilder, Neighbor, NeighborCache};
-use smoltcp::socket::{SocketRef, SocketSet, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
+use smoltcp::socket::{SocketSet, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
 use smoltcp::time::Instant;
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
-use coap_lite::{CoapRequest, RequestType};
+use coap::CoapClient;
 
-struct CoapClient {}
-impl CoapClient {
-    pub fn poll(&mut self, socket: SocketRef<'_, UdpSocket>) {
-        info!("Testing CoAP");
-
-        let mut request: CoapRequest<u32> = CoapRequest::new();
-        request.set_path("/Test");
-        request.set_method(RequestType::Get);
-        let _packet = request.message.to_bytes().unwrap();
-    }
-}
+mod coap;
 
 // TODO: should check how much we actually need here and decrease (or increase)
 // these if needed
 const UDP_META_DEFAULT_BUF_LEN: usize = 16;
 const UDP_DEFAULT_BUF_LEN: usize = 512;
+
+// FIXME: should not use hardcoded server addresses, instead server should be
+// discovered
+const SERVER_IP_ADDRESS: IpAddress = IpAddress::Ipv4(Ipv4Address::new(169, 254, 0, 8));
+
+// Client also needs a port to be able to communicate with server. Usually local
+// port is dynamically assigned from 49152-65535 pool. Here we statically assign
+// the first port from dynamic range.
+// See https://en.wikipedia.org/wiki/Ephemeral_port
+const COAP_LOCAL_PORT: u16 = 49152;
 
 #[cfg_attr(target_os = "none", pal::cortex_m_rt::entry)]
 fn main() -> ! {
@@ -48,6 +52,7 @@ fn main() -> ! {
     let mut neighbor_cache_storage: [Option<(IpAddress, Neighbor)>; 16] = [None; 16];
     let neighbor_cache = NeighborCache::new(&mut neighbor_cache_storage[..]);
 
+    // Set Fobnail's IP address to 169.254.0.1
     let mut ip_addrs = [IpCidr::new(IpAddress::v4(169, 254, 0, 1), 16)];
     let eth_phy = pal::ethernet::create_phy();
     let mut iface = EthernetInterfaceBuilder::new(eth_phy)
@@ -83,11 +88,9 @@ fn main() -> ! {
         UdpSocketBuffer::new(&mut udp_coap_tx_metadata[..], &mut udp_coap_tx_payload[..]);
 
     let mut coap_socket = UdpSocket::new(udp_coap_rx, udp_coap_tx);
-    // TODO: which port should we use for CoAP?
     coap_socket
-        .bind((Ipv4Address::UNSPECIFIED, 9944))
-        .expect("UDP bind failed (CoAP)");
-
+        .bind((Ipv4Address::UNSPECIFIED, COAP_LOCAL_PORT))
+        .expect("CoAP UDP bind failed");
     debug!("COAP socket initialized");
 
     // Add sockets into socket set
@@ -96,7 +99,18 @@ fn main() -> ! {
 
     let mut echo_buf = [0u8; 128];
 
-    let mut coap_client = CoapClient {};
+    let mut coap_client = CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT);
+    coap_client.queue_request(
+        {
+            let mut request = CoapRequest::new();
+            request.set_path("/");
+            request.set_method(coap_lite::RequestType::Get);
+            request
+        },
+        || {
+            info!("Request completed");
+        },
+    );
 
     loop {
         match iface.poll(
@@ -126,7 +140,7 @@ fn main() -> ! {
         }
 
         // CoAP poll
-        coap_client.poll(socket_set.get::<UdpSocket>(echo_socket_handle));
+        coap_client.poll(socket_set.get::<UdpSocket>(coap_socket_handle));
 
         pal::cpu_relax();
     }
