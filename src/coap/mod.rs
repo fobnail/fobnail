@@ -14,12 +14,7 @@ use smoltcp::{
 
 mod error;
 
-#[derive(PartialEq, Eq)]
-enum State {
-    One { nr_unreachable_failures: u32 },
-    Two,
-}
-
+/// Token is used as a unique request identifier.
 type Token = u64;
 
 struct PendingRequest {
@@ -40,7 +35,6 @@ impl PendingRequest {
 }
 
 pub struct CoapClient {
-    state: State,
     /// Server IP address and port.
     remote_endpoint: IpEndpoint,
     /// Requests queued for sending.
@@ -59,9 +53,6 @@ impl CoapClient {
         let endpoint = IpEndpoint::new(server_addr, port);
 
         Self {
-            state: State::One {
-                nr_unreachable_failures: 0,
-            },
             remote_endpoint: endpoint,
             queue: VecDeque::with_capacity(16),
             wait_queue: BTreeMap::new(),
