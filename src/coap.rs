@@ -5,11 +5,14 @@ use alloc::{
     collections::{BTreeMap, VecDeque},
     vec::Vec,
 };
-use coap_lite::{CoapRequest, Packet, RequestType};
+use coap_lite::{CoapRequest, MessageClass, Packet};
+pub use error::*;
 use smoltcp::{
     socket::{SocketRef, UdpSocket},
     wire::{IpAddress, IpEndpoint},
 };
+
+mod error;
 
 #[derive(PartialEq, Eq)]
 enum State {
@@ -23,7 +26,17 @@ struct PendingRequest {
     token: Token,
     packet: Vec<u8>,
     /// Handler called on request completion.
-    callback: Box<dyn FnOnce()>,
+    callback: Box<dyn FnOnce(Result<Packet>)>,
+}
+
+impl PendingRequest {
+    /// Notify callback that request has completed, either successfuly or with
+    /// error.
+    pub fn complete(self, result: Result<Packet>) {
+        let Self { callback, .. } = self;
+
+        (callback)(result);
+    }
 }
 
 pub struct CoapClient {
@@ -59,7 +72,7 @@ impl CoapClient {
     // TODO: document this
     pub fn queue_request<T>(&mut self, mut request: CoapRequest<()>, callback: T)
     where
-        T: FnOnce() + 'static,
+        T: FnOnce(Result<Packet>) + 'static,
     {
         if self.queue.len() == self.queue.capacity() {
             // TODO: return an error instead of panicking
@@ -100,26 +113,39 @@ impl CoapClient {
                     }
 
                     match Packet::from_bytes(packet) {
-                        Ok(packet) => {
-                            if let Some(token) = TryInto::<[u8; size_of::<Token>()]>::try_into(
-                                packet.get_token().as_slice(),
-                            )
-                            .map(|x| Token::from_ne_bytes(x))
-                            .ok()
-                            {
-                                if let Some(request) = self.wait_queue.remove(&token) {
-                                    (request.callback)();
+                        Ok(packet) => match packet.header.code {
+                            MessageClass::Response(_) => {
+                                if let Some(token) = TryInto::<[u8; size_of::<Token>()]>::try_into(
+                                    packet.get_token().as_slice(),
+                                )
+                                .map(|x| Token::from_ne_bytes(x))
+                                .ok()
+                                {
+                                    if let Some(request) = self.wait_queue.remove(&token) {
+                                        self.process_response(request, packet);
+                                    } else {
+                                        warn!("Ignoring packet with unknown token {}", token);
+                                    }
                                 } else {
-                                    warn!("Ignoring packet with unknown token {}", token);
+                                    warn!(
+                                        "Ignoring packet with invalid token: token len={}, expected {}",
+                                        packet.get_token().len(),
+                                        size_of::<Token>()
+                                    );
                                 }
-                            } else {
-                                warn!(
-                                    "Ignoring packet with invalid token: token len={}, expected {}",
-                                    packet.get_token().len(),
-                                    size_of::<Token>()
-                                );
                             }
-                        }
+                            MessageClass::Empty => {
+                                // Reset packets are used to reject message
+                                // see RFC 7252 section 4.2
+                                //
+                                // TODO: support them
+                                warn!("Ignored reset message");
+                            }
+                            t => {
+                                // We process only response packets
+                                warn!("Ignored incoming packet of type {}", t);
+                            }
+                        },
                         Err(e) => {
                             error!("Got invalid CoAP packet from {}: {}", ep, e)
                         }
@@ -159,6 +185,33 @@ impl CoapClient {
         } else {
             // No more packets to send
             false
+        }
+    }
+
+    fn process_response(&mut self, request: PendingRequest, response: Packet) {
+        // coap-lite does not process options (it only parses them). We
+        // must make sure response does not contain some unknown
+        // critical option. In that case response must be rejected,
+        // non-critical (elective) options may be safely ignored.
+        // See RFC 7252 section 5.4.1
+        //
+        // From RFC 7252 section 5.4.6:
+        // An Option is identified by an option number, which also provides some
+        // additional semantics information, e.g., odd numbers indicate a
+        // critical option, while even numbers indicate an elective option.
+        //
+        // Currently we don't support any of critical options
+        if let Some((&id, _)) = response.options().find(|(&id, _)| id % 2 != 0) {
+            error!(
+                "Unknown critical option ({}) encountered in response to {}",
+                id, request.token
+            );
+
+            // TODO: should we send reset packet?
+            request.complete(Err(Error::ProtocolError));
+        } else {
+            // Pass response to callback
+            request.complete(Ok(response));
         }
     }
 }

@@ -107,9 +107,7 @@ fn main() -> ! {
             request.set_method(coap_lite::RequestType::Get);
             request
         },
-        || {
-            info!("Request completed");
-        },
+        |_result| {},
     );
 
     loop {
