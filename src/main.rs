@@ -13,7 +13,7 @@ extern crate log;
 #[macro_use]
 extern crate alloc;
 
-use coap_lite::CoapRequest;
+use client::FobnailClient;
 use smoltcp::iface::{EthernetInterfaceBuilder, Neighbor, NeighborCache};
 use smoltcp::socket::{SocketSet, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
 use smoltcp::time::Instant;
@@ -21,6 +21,7 @@ use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 use coap::CoapClient;
 
+mod client;
 mod coap;
 
 // TODO: should check how much we actually need here and decrease (or increase)
@@ -99,16 +100,8 @@ fn main() -> ! {
 
     let mut echo_buf = [0u8; 128];
 
-    let mut coap_client = CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT);
-    coap_client.queue_request(
-        {
-            let mut request = CoapRequest::new();
-            request.set_path("/");
-            request.set_method(coap_lite::RequestType::Get);
-            request
-        },
-        |_result| {},
-    );
+    let coap_client = CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT);
+    let mut fobnail_client = FobnailClient::new(coap_client);
 
     loop {
         match iface.poll(
@@ -138,7 +131,7 @@ fn main() -> ! {
         }
 
         // CoAP poll
-        coap_client.poll(socket_set.get::<UdpSocket>(coap_socket_handle));
+        fobnail_client.poll(socket_set.get::<UdpSocket>(coap_socket_handle));
 
         pal::cpu_relax();
     }
