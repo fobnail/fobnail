@@ -7,6 +7,7 @@ use alloc::{
 };
 use coap_lite::{CoapRequest, MessageClass, Packet};
 pub use error::*;
+use pal::timer::get_time_ms;
 use smoltcp::{
     socket::{SocketRef, UdpSocket},
     wire::{IpAddress, IpEndpoint},
@@ -22,6 +23,10 @@ struct PendingRequest {
     packet: Vec<u8>,
     /// Handler called on request completion.
     callback: Box<dyn FnOnce(Result<Packet>)>,
+    /// How long are we going to wait for a response.
+    timeout_ms: u64,
+    /// Time when request has been sent.
+    send_time: u64,
 }
 
 impl PendingRequest {
@@ -47,6 +52,7 @@ pub struct CoapClient {
 }
 impl CoapClient {
     pub const COAP_DEFAULT_PORT: u16 = 5683;
+    pub const DEFAULT_TIMEOUT: u64 = 1000; // 1 second
 
     /// Creates new client instance
     pub fn new(server_addr: IpAddress, port: u16) -> Self {
@@ -83,11 +89,14 @@ impl CoapClient {
             packet,
             token,
             callback: Box::new(callback),
+            send_time: 0,
+            timeout_ms: Self::DEFAULT_TIMEOUT,
         });
     }
 
     pub fn poll(&mut self, mut socket: SocketRef<'_, UdpSocket>) {
         self.process_incoming(&mut socket);
+        self.check_timeouts();
         while self.send_next_request(&mut socket) {}
     }
 
@@ -156,7 +165,8 @@ impl CoapClient {
             match socket.send_slice(&request.packet, self.remote_endpoint) {
                 Ok(()) => {
                     let token = request.token;
-                    let request = self.queue.pop_front().unwrap();
+                    let mut request = self.queue.pop_front().unwrap();
+                    request.send_time = get_time_ms() as u64;
                     if self.wait_queue.insert(token, request).is_some() {
                         // This should never happen
                         panic!("Duplicated token ({}) in CoAP client queue", token);
@@ -203,6 +213,32 @@ impl CoapClient {
         } else {
             // Pass response to callback
             request.complete(Ok(response));
+        }
+    }
+
+    fn check_timeouts(&mut self) {
+        let now = get_time_ms() as u64;
+
+        loop {
+            let mut timed_out = None;
+
+            for (&token, request) in self.wait_queue.iter() {
+                let deadline = request.send_time + request.timeout_ms;
+                if now > deadline {
+                    timed_out = Some(token);
+
+                    // We cannot mutate map while iterating over it
+                    break;
+                }
+            }
+
+            if let Some(token) = timed_out.take() {
+                let request = self.wait_queue.remove(&token).unwrap();
+                request.complete(Err(Error::Timeout))
+            } else {
+                // No more timed out requests
+                break;
+            }
         }
     }
 }
