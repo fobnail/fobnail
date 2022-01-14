@@ -84,7 +84,10 @@ pub fn init() {
     );
 
     // configure TIMER2 to be used for delays
-    timer::init(Timer::one_shot(periph.TIMER2));
+    timer::init(
+        Timer::one_shot(periph.TIMER2),
+        Timer::one_shot(periph.TIMER3),
+    );
 
     usb::init(periph.USBD);
 
