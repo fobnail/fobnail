@@ -18,18 +18,18 @@ mod error;
 /// Token is used as a unique request identifier.
 type Token = u64;
 
-struct PendingRequest {
+struct PendingRequest<'a> {
     token: Token,
     packet: Vec<u8>,
     /// Handler called on request completion.
-    callback: Box<dyn FnOnce(Result<Packet>)>,
+    callback: Box<dyn FnOnce(Result<Packet>) + 'a>,
     /// How long are we going to wait for a response.
     timeout_ms: u64,
     /// Time when request has been sent.
     send_time: u64,
 }
 
-impl PendingRequest {
+impl PendingRequest<'_> {
     /// Notify callback that request has completed, either successfuly or with
     /// error.
     pub fn complete(self, result: Result<Packet>) {
@@ -39,18 +39,18 @@ impl PendingRequest {
     }
 }
 
-pub struct CoapClient {
+pub struct CoapClient<'a> {
     /// Server IP address and port.
     remote_endpoint: IpEndpoint,
     /// Requests queued for sending.
-    queue: VecDeque<PendingRequest>,
+    queue: VecDeque<PendingRequest<'a>>,
     /// These requests have been sent, we are awaiting response.
-    wait_queue: BTreeMap<Token, PendingRequest>,
+    wait_queue: BTreeMap<Token, PendingRequest<'a>>,
     /// Token is a unique, opaque value that is sent back unchanded. We use it
     /// to match server's response to request.
     next_token: Token,
 }
-impl CoapClient {
+impl<'a> CoapClient<'a> {
     pub const COAP_DEFAULT_PORT: u16 = 5683;
     pub const DEFAULT_TIMEOUT: u64 = 1000; // 1 second
 
@@ -69,7 +69,7 @@ impl CoapClient {
     // TODO: document this
     pub fn queue_request<T>(&mut self, mut request: CoapRequest<()>, callback: T)
     where
-        T: FnOnce(Result<Packet>) + 'static,
+        T: FnOnce(Result<Packet>) + 'a,
     {
         if self.queue.len() == self.queue.capacity() {
             // TODO: return an error instead of panicking
