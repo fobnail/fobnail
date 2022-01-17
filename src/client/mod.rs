@@ -4,7 +4,10 @@ use alloc::rc::Rc;
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use smoltcp::socket::{SocketRef, UdpSocket};
 
-use crate::coap::{CoapClient, Error};
+use crate::{
+    coap::{CoapClient, Error},
+    pal::timer::get_time_ms,
+};
 use state::State;
 
 mod state;
@@ -30,7 +33,13 @@ impl<'a> FobnailClient<'a> {
         let state = &mut *state.borrow_mut();
 
         match state {
-            State::Idle => (),
+            State::Idle { timeout } => {
+                if let Some(timeout) = timeout {
+                    if get_time_ms() as u64 > *timeout {
+                        *state = State::default();
+                    }
+                }
+            }
             State::Init {
                 ref mut request_pending,
             } => {
@@ -46,7 +55,9 @@ impl<'a> FobnailClient<'a> {
             }
             State::InitDataReceived { data } => {
                 info!("Received response from server: {:x?}", data);
-                *state = State::Idle;
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                };
             }
         }
     }
@@ -61,19 +72,25 @@ impl<'a> FobnailClient<'a> {
     /// Handles communication errors like timeouts or malformed response packets
     fn handle_coap_error(error: Error, state: Rc<RefCell<State>>) {
         let state = &*state;
-        match &mut *state.borrow_mut() {
+        let state = &mut *state.borrow_mut();
+        match state {
             State::Init { request_pending } => {
                 if matches!(error, Error::Timeout) {
                     // Immediatelly resend packet
                     *request_pending = false
                 } else {
-                    error!("Communication with attester failed: {:#?}, retrying", error);
-                    *request_pending = false
+                    error!(
+                        "Communication with attester failed: {:#?}, retrying after 1s",
+                        error
+                    );
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 1000),
+                    };
                 }
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle => unreachable!(),
+            State::InitDataReceived { .. } | State::Idle { .. } => unreachable!(),
         }
     }
 
@@ -125,12 +142,14 @@ impl<'a> FobnailClient<'a> {
         let state = &mut *state.borrow_mut();
         match state {
             State::Init { .. } => {
-                error!("Switching into IDLE state due to error");
-                *state = State::Idle;
+                error!("Retrying in 5s ...");
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                };
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle => unreachable!(),
+            State::InitDataReceived { .. } | State::Idle { .. } => unreachable!(),
         }
 
         true
@@ -156,7 +175,7 @@ impl<'a> FobnailClient<'a> {
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle => unreachable!(),
+            State::InitDataReceived { .. } | State::Idle { .. } => unreachable!(),
         }
     }
 }

@@ -7,8 +7,8 @@ pub enum State {
     /// State after receiving init data
     InitDataReceived { data: Vec<u8> },
 
-    /// Idle state
-    Idle,
+    /// Idle state with optional timeout. After timeout resets into Init state.
+    Idle { timeout: Option<u64> },
 }
 
 impl Default for State {
