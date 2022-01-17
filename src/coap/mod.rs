@@ -5,7 +5,7 @@ use alloc::{
     collections::{BTreeMap, VecDeque},
     vec::Vec,
 };
-use coap_lite::{CoapRequest, MessageClass, Packet};
+use coap_lite::{CoapRequest, MessageClass, MessageType, Packet};
 pub use error::*;
 use pal::timer::get_time_ms;
 use smoltcp::{
@@ -18,9 +18,8 @@ mod error;
 /// Token is used as a unique request identifier.
 type Token = u64;
 
-struct PendingRequest<'a> {
+struct ConfirmableRequest<'a> {
     token: Token,
-    packet: Vec<u8>,
     /// Handler called on request completion.
     callback: Box<dyn FnOnce(Result<Packet>) + 'a>,
     /// How long are we going to wait for a response.
@@ -29,11 +28,19 @@ struct PendingRequest<'a> {
     send_time: u64,
 }
 
+struct PendingRequest<'a> {
+    packet: Vec<u8>,
+    confirmable: Option<ConfirmableRequest<'a>>,
+}
+
 impl PendingRequest<'_> {
     /// Notify callback that request has completed, either successfuly or with
     /// error.
     pub fn complete(self, result: Result<Packet>) {
-        let Self { callback, .. } = self;
+        let Self { confirmable, .. } = self;
+
+        let ConfirmableRequest { callback, .. } =
+            confirmable.expect("complete() called on non-confirmable request");
 
         (callback)(result);
     }
@@ -72,8 +79,10 @@ impl<'a> CoapClient<'a> {
         T: FnOnce(Result<Packet>) + 'a,
     {
         if self.queue.len() == self.queue.capacity() {
-            // TODO: return an error instead of panicking
-            panic!("CoAP queue is full");
+            warn!(
+                "CoAP queue is full (current length {}), growing ...",
+                self.queue.len()
+            );
         }
 
         // TODO: maybe we should fill message ID
@@ -87,10 +96,12 @@ impl<'a> CoapClient<'a> {
 
         self.queue.push_back(PendingRequest {
             packet,
-            token,
-            callback: Box::new(callback),
-            send_time: 0,
-            timeout_ms: Self::DEFAULT_TIMEOUT,
+            confirmable: Some(ConfirmableRequest {
+                token,
+                callback: Box::new(callback),
+                send_time: 0,
+                timeout_ms: Self::DEFAULT_TIMEOUT,
+            }),
         });
     }
 
@@ -113,8 +124,11 @@ impl<'a> CoapClient<'a> {
                     }
 
                     match Packet::from_bytes(packet) {
-                        Ok(packet) => match packet.header.code {
-                            MessageClass::Response(_) => {
+                        Ok(packet) => match (packet.header.get_type(), packet.header.code) {
+                            (
+                                MessageType::Confirmable | MessageType::NonConfirmable,
+                                MessageClass::Response(_),
+                            ) => {
                                 if let Some(token) = TryInto::<[u8; size_of::<Token>()]>::try_into(
                                     packet.get_token().as_slice(),
                                 )
@@ -134,16 +148,38 @@ impl<'a> CoapClient<'a> {
                                     );
                                 }
                             }
-                            MessageClass::Empty => {
-                                // Reset packets are used to reject message
-                                // see RFC 7252 section 4.2
-                                //
-                                // TODO: support them
-                                warn!("Ignored reset message");
+                            (MessageType::Acknowledgement, c) => {
+                                // ACK packets may be used for transmitting response (Piggybacked response)
+                                // see RFC 7252 section 5.2.1
+
+                                if !packet.payload.is_empty() {
+                                    error!("Piggybacked responses are not implemented, response is lost (token: {:?})", packet.get_token());
+                                }
+
+                                warn!("ACK class {:?}", c);
+
+                                // Ignore empty acknowledgement packets.
+                                // These are used to signify that server
+                                // has received request and is preparing
+                                // response.
+                                // We should receive response shortly.
                             }
-                            t => {
+                            (MessageType::Reset, c) => {
+                                // TODO: implement
+
+                                // Empty packets are used to reject message
+                                // see RFC 7252 section 4.2
+
+                                // Also may be used for pinging:
+                                // Provoking a Reset message (e.g., by sending
+                                // an Empty Confirmable message) is also useful
+                                // as an inexpensive check of the liveness of an
+                                // endpoint ("CoAP ping").
+                                warn!("Got reset packet (class {:?}), ignoring ...", c);
+                            }
+                            (t, c) => {
                                 // We process only response packets
-                                warn!("Ignored incoming packet of type {}", t);
+                                warn!("Ignored incoming packet of type {:?} and class {:?}", t, c);
                             }
                         },
                         Err(e) => {
@@ -164,12 +200,15 @@ impl<'a> CoapClient<'a> {
         if let Some(request) = self.queue.get(0) {
             match socket.send_slice(&request.packet, self.remote_endpoint) {
                 Ok(()) => {
-                    let token = request.token;
                     let mut request = self.queue.pop_front().unwrap();
-                    request.send_time = get_time_ms() as u64;
-                    if self.wait_queue.insert(token, request).is_some() {
-                        // This should never happen
-                        panic!("Duplicated token ({}) in CoAP client queue", token);
+                    if let Some(confirmable) = request.confirmable.as_mut() {
+                        let token = confirmable.token;
+                        confirmable.send_time = get_time_ms() as u64;
+
+                        if self.wait_queue.insert(token, request).is_some() {
+                            // This should never happen
+                            panic!("Duplicated token ({}) in CoAP client queue", token);
+                        }
                     }
 
                     true
@@ -179,7 +218,12 @@ impl<'a> CoapClient<'a> {
                     false
                 }
                 Err(e) => {
-                    error!("Failed to send packet ID {}: {}", request.token, e);
+                    if let Some(confirmable) = request.confirmable.as_ref() {
+                        error!("Failed to send packet ID {}: {}", confirmable.token, e);
+                    } else {
+                        error!("Failed to send packet (non-confirmable): {}", e);
+                    }
+
                     false
                 }
             }
@@ -202,15 +246,25 @@ impl<'a> CoapClient<'a> {
         // critical option, while even numbers indicate an elective option.
         //
         // Currently we don't support any of critical options
+
+        let confirmable = request
+            .confirmable
+            .as_ref()
+            .expect("process_response() called with a non-confirmable request");
+
         if let Some((&id, _)) = response.options().find(|(&id, _)| id % 2 != 0) {
             error!(
                 "Unknown critical option ({}) encountered in response to {}",
-                id, request.token
+                id, confirmable.token
             );
 
             // TODO: should we send reset packet?
             request.complete(Err(Error::ProtocolError));
         } else {
+            // Server response may be a confirmable packet, in that case we need
+            // to send ACK to stop server from retransmitting same packet over
+            // and over again
+
             // Pass response to callback
             request.complete(Ok(response));
         }
@@ -223,7 +277,15 @@ impl<'a> CoapClient<'a> {
             let mut timed_out = None;
 
             for (&token, request) in self.wait_queue.iter() {
-                let deadline = request.send_time + request.timeout_ms;
+                // Packets stored in wait_queue are awaiting for response.
+                // We expect no response to non-confirmable hence we never store
+                // them in wait_queue.
+                let confirmable = request
+                    .confirmable
+                    .as_ref()
+                    .expect("non-confirmable request in wait queue");
+
+                let deadline = confirmable.send_time + confirmable.timeout_ms;
                 if now > deadline {
                     timed_out = Some(token);
 
