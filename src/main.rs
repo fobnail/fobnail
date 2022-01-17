@@ -27,7 +27,12 @@ mod coap;
 // TODO: should check how much we actually need here and decrease (or increase)
 // these if needed
 const UDP_META_DEFAULT_BUF_LEN: usize = 16;
-const UDP_DEFAULT_BUF_LEN: usize = 512;
+const ECHO_SERVER_BUF_LEN: usize = 512;
+// Set at Ethernet MTU
+// Actually we can transfer less than that in UDP packet since Ethernet frame +
+// IP frame already takes some space. Should compute exatly how much bytes do we
+// need.
+const COAP_CLIENT_BUF_LEN: usize = 1500;
 
 // FIXME: should not use hardcoded server addresses, instead server should be
 // discovered
@@ -39,19 +44,30 @@ const SERVER_IP_ADDRESS: IpAddress = IpAddress::Ipv4(Ipv4Address::new(169, 254, 
 // See https://en.wikipedia.org/wiki/Ephemeral_port
 const COAP_LOCAL_PORT: u16 = 49152;
 
+fn make_udp_socket(max_packet: usize, port: u16) -> UdpSocket<'static> {
+    let udp_rx = UdpSocketBuffer::new(
+        vec![UdpPacketMetadata::EMPTY; UDP_META_DEFAULT_BUF_LEN],
+        vec![0u8; max_packet],
+    );
+    let udp_tx = UdpSocketBuffer::new(
+        vec![UdpPacketMetadata::EMPTY; UDP_META_DEFAULT_BUF_LEN],
+        vec![0u8; max_packet],
+    );
+    let mut socket = UdpSocket::new(udp_rx, udp_tx);
+    socket
+        .bind((Ipv4Address::UNSPECIFIED, port))
+        .expect("UDP bind failed");
+    socket
+}
+
 #[cfg_attr(target_os = "none", pal::cortex_m_rt::entry)]
 fn main() -> ! {
     pal::init();
 
-    // We are going to use 2 sockets:
-    // one for echo service
-    // and one for CoAP client
-    let mut socket_set_buf = [None, None];
-    let mut socket_set = SocketSet::new(&mut socket_set_buf[..]);
-
-    // Initialize network interface
     let mut neighbor_cache_storage: [Option<(IpAddress, Neighbor)>; 16] = [None; 16];
     let neighbor_cache = NeighborCache::new(&mut neighbor_cache_storage[..]);
+
+    let mut socket_set = SocketSet::new(vec![]);
 
     // Set Fobnail's IP address to 169.254.0.1
     let mut ip_addrs = [IpCidr::new(IpAddress::v4(169, 254, 0, 1), 16)];
@@ -62,43 +78,16 @@ fn main() -> ! {
         .ip_addrs(&mut ip_addrs[..])
         .finalize();
 
-    // Create UDP socket for echo service
-    let mut udp_rx_metadata = [UdpPacketMetadata::EMPTY; UDP_META_DEFAULT_BUF_LEN];
-    let mut udp_rx_payload = [0u8; UDP_DEFAULT_BUF_LEN];
-    let mut udp_tx_metadata = [UdpPacketMetadata::EMPTY; UDP_META_DEFAULT_BUF_LEN];
-    let mut udp_tx_payload = [0u8; UDP_DEFAULT_BUF_LEN];
-
-    let udp_rx = UdpSocketBuffer::new(&mut udp_rx_metadata[..], &mut udp_rx_payload[..]);
-    let udp_tx = UdpSocketBuffer::new(&mut udp_tx_metadata[..], &mut udp_tx_payload[..]);
-    let mut socket = UdpSocket::new(udp_rx, udp_tx);
-    socket
-        .bind((Ipv4Address::UNSPECIFIED, 9400))
-        .expect("UDP bind failed");
-
+    let socket = make_udp_socket(ECHO_SERVER_BUF_LEN, 9400);
+    let mut echo_buf = [0u8; 512];
     debug!("UDP socket initialized");
 
-    // Create UDP socket for CoAP client
-    let mut udp_coap_rx_metadata = [UdpPacketMetadata::EMPTY; UDP_META_DEFAULT_BUF_LEN];
-    let mut udp_coap_rx_payload = [0u8; UDP_DEFAULT_BUF_LEN];
-    let mut udp_coap_tx_metadata = [UdpPacketMetadata::EMPTY; UDP_META_DEFAULT_BUF_LEN];
-    let mut udp_coap_tx_payload = [0u8; UDP_DEFAULT_BUF_LEN];
-
-    let udp_coap_rx =
-        UdpSocketBuffer::new(&mut udp_coap_rx_metadata[..], &mut udp_coap_rx_payload[..]);
-    let udp_coap_tx =
-        UdpSocketBuffer::new(&mut udp_coap_tx_metadata[..], &mut udp_coap_tx_payload[..]);
-
-    let mut coap_socket = UdpSocket::new(udp_coap_rx, udp_coap_tx);
-    coap_socket
-        .bind((Ipv4Address::UNSPECIFIED, COAP_LOCAL_PORT))
-        .expect("CoAP UDP bind failed");
+    let coap_socket = make_udp_socket(COAP_CLIENT_BUF_LEN, COAP_LOCAL_PORT);
     debug!("COAP socket initialized");
 
     // Add sockets into socket set
     let echo_socket_handle = socket_set.add(socket);
     let coap_socket_handle = socket_set.add(coap_socket);
-
-    let mut echo_buf = [0u8; 128];
 
     let coap_client = CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT);
     let mut fobnail_client = FobnailClient::new(coap_client);
