@@ -126,7 +126,11 @@ impl<'a> CoapClient<'a> {
                     match Packet::from_bytes(packet) {
                         Ok(packet) => match (packet.header.get_type(), packet.header.code) {
                             (
-                                MessageType::Confirmable | MessageType::NonConfirmable,
+                                // ACK packets may be used for transmitting response (Piggybacked response)
+                                // see RFC 7252 section 5.2.1
+                                MessageType::Acknowledgement
+                                | MessageType::Confirmable
+                                | MessageType::NonConfirmable,
                                 MessageClass::Response(_),
                             ) => {
                                 if let Some(token) = TryInto::<[u8; size_of::<Token>()]>::try_into(
@@ -148,21 +152,11 @@ impl<'a> CoapClient<'a> {
                                     );
                                 }
                             }
-                            (MessageType::Acknowledgement, c) => {
-                                // ACK packets may be used for transmitting response (Piggybacked response)
-                                // see RFC 7252 section 5.2.1
-
-                                if !packet.payload.is_empty() {
-                                    error!("Piggybacked responses are not implemented, response is lost (token: {:?})", packet.get_token());
-                                }
-
-                                warn!("ACK class {:?}", c);
-
-                                // Ignore empty acknowledgement packets.
-                                // These are used to signify that server
-                                // has received request and is preparing
-                                // response.
-                                // We should receive response shortly.
+                            (MessageType::Acknowledgement, MessageClass::Empty) => {
+                                // Ignore empty acknowledgement packets. These
+                                // are used to signify that server has received
+                                // request and is preparing response. We should
+                                // receive response shortly.
                             }
                             (MessageType::Reset, c) => {
                                 // TODO: implement
