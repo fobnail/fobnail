@@ -74,19 +74,14 @@ impl<'a> FobnailClient<'a> {
         let state = &*state;
         let state = &mut *state.borrow_mut();
         match state {
-            State::Init { request_pending } => {
-                if matches!(error, Error::Timeout) {
-                    // Immediatelly resend packet
-                    *request_pending = false
-                } else {
-                    error!(
-                        "Communication with attester failed: {:#?}, retrying after 1s",
-                        error
-                    );
-                    *state = State::Idle {
-                        timeout: Some(get_time_ms() as u64 + 1000),
-                    };
-                }
+            State::Init { .. } => {
+                error!(
+                    "Communication with attester failed: {:#?}, retrying after 1s",
+                    error
+                );
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 1000),
+                };
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
