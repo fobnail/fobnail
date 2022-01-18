@@ -145,9 +145,24 @@ impl<'a> CoapClient<'a> {
                                 {
                                     if let Some(request) = self.wait_queue.remove(&token) {
                                         self.process_response(request, packet);
-                                    } else {
-                                        warn!("Ignoring packet with unknown token {}", token);
                                     }
+
+                                    // FIXME:
+                                    // On nRF when we send packet before target host gets discovered smoltcp
+                                    // doesn't return error, instead it buffers the packets till host finally
+                                    // gets discovered (sending ARP requests every 3 seconds).
+                                    // Request timeouts and CoapClient re-sends that request filling smoltcp
+                                    // buffer.
+                                    //
+                                    // Because of this behavior one problem arises:
+                                    // CoapClient keeps sending the same packet till outgoing buffer gets filled
+                                    // Surprisingly this doesn't cause DoS and smoltcp is still able to send ARP
+                                    // packets.
+                                    // But when host gets discovered, packets are sent,
+                                    // sending many duplicates of the same packet (limited by outgoing buffer size).
+                                    // Duplicates should be detected and handled by server, and server shouldn't
+                                    // process the same request multiple, but it may send the same response multiple
+                                    // times.
                                 } else {
                                     warn!(
                                         "Ignoring packet with invalid token: token len={}, expected {}",
@@ -259,9 +274,9 @@ impl<'a> CoapClient<'a> {
             // TODO: should we send reset packet?
             request.complete(Err(Error::ProtocolError));
         } else {
-            // Server response may be a confirmable packet, in that case we need
-            // to send ACK to stop server from retransmitting same packet over
-            // and over again
+            // TODO: Server response may be a confirmable packet, in that case
+            // we need to send ACK to stop server from retransmitting same
+            // packet over and over again
 
             // Pass response to callback
             request.complete(Ok(response));
