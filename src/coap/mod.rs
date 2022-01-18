@@ -58,6 +58,8 @@ pub struct CoapClient<'a> {
     /// Token is a unique, opaque value that is sent back unchanded. We use it
     /// to match server's response to request.
     next_token: Token,
+    /// Message ID is used for deduplication purposes.
+    next_msg_id: u16,
 }
 impl<'a> CoapClient<'a> {
     pub const COAP_DEFAULT_PORT: u16 = 5683;
@@ -71,7 +73,13 @@ impl<'a> CoapClient<'a> {
             remote_endpoint: endpoint,
             queue: VecDeque::with_capacity(16),
             wait_queue: BTreeMap::new(),
+            // From RFC 7252 section 4.4
+            // It is strongly recommended that the initial
+            // value of the variable (e.g., on startup) be randomized, in order
+            // to make successful off-path attacks on the protocol less likely.
+            // TODO: do we need this?
             next_token: 0,
+            next_msg_id: 0,
         }
     }
 
@@ -87,7 +95,15 @@ impl<'a> CoapClient<'a> {
             );
         }
 
-        // TODO: maybe we should fill message ID
+        request.message.header.message_id = self.next_msg_id;
+        // Use wrapping add to not panic on overflow.
+        // From RFC 7252 section 4.4:
+        // The same Message ID MUST NOT be reused (in communicating with the
+        // same endpoint) within the EXCHANGE_LIFETIME (Section 4.8.2).
+        //
+        // We are not sending many requests so lets assume this won't happen.
+        self.next_msg_id = self.next_msg_id.wrapping_add(1);
+
         let token = self.next_token;
         self.next_token += 1;
         // Assign a unique token so that we can match response to request.
