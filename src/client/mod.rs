@@ -54,7 +54,18 @@ impl<'a> FobnailClient<'a> {
                 }
             }
             State::InitDataReceived { data } => {
-                info!("Received response from server: {:x?}", data);
+                match ::core::str::from_utf8(&data[..]) {
+                    Ok(s) => {
+                        info!("Received response from server: {}", s);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Received response from server but it's not a valid UTF-8 string: {}",
+                            e
+                        );
+                    }
+                }
+
                 *state = State::Idle {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 };
