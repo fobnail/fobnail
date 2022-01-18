@@ -26,6 +26,8 @@ struct ConfirmableRequest<'a> {
     timeout_ms: u64,
     /// Time when request has been sent.
     send_time: u64,
+    /// How many times we will resend the same packet. u16::MAX meanst infinite.
+    retry_count: u16,
 }
 
 struct PendingRequest<'a> {
@@ -99,8 +101,10 @@ impl<'a> CoapClient<'a> {
             confirmable: Some(ConfirmableRequest {
                 token,
                 callback: Box::new(callback),
+                // Will be filled in send_next_request
                 send_time: 0,
                 timeout_ms: Self::DEFAULT_TIMEOUT,
+                retry_count: u16::MAX,
             }),
         });
     }
@@ -289,8 +293,17 @@ impl<'a> CoapClient<'a> {
             }
 
             if let Some(token) = timed_out.take() {
-                let request = self.wait_queue.remove(&token).unwrap();
-                request.complete(Err(Error::Timeout))
+                let mut request = self.wait_queue.remove(&token).unwrap();
+                let confirmable = request.confirmable.as_mut().expect("msg");
+                // u16::MAX means infinite
+                if confirmable.retry_count != u16::MAX {
+                    confirmable.retry_count -= 1;
+                }
+                if confirmable.retry_count > 0 {
+                    self.queue.push_back(request);
+                } else {
+                    request.complete(Err(Error::Timeout));
+                }
             } else {
                 // No more timed out requests
                 break;
