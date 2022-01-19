@@ -10,6 +10,7 @@ use crate::{
 };
 use state::State;
 
+mod metadata;
 mod state;
 
 /// Client which speaks to Fobnail server located on attester
@@ -66,9 +67,23 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
 
-                *state = State::Idle {
-                    timeout: Some(get_time_ms() as u64 + 5000),
+                *state = State::RequestMetadata {
+                    request_pending: false,
                 };
+            }
+            State::RequestMetadata { request_pending } => {
+                if !*request_pending {
+                    *request_pending = true;
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/metadata");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::VerifyMetadata { .. } => {
+                unimplemented!("metadata verification not implemented")
             }
         }
     }
@@ -85,10 +100,10 @@ impl<'a> FobnailClient<'a> {
         let state = &*state;
         let state = &mut *state.borrow_mut();
         match state {
-            State::Init { .. } => {
+            State::Init { .. } | State::RequestMetadata { .. } => {
                 error!(
-                    "Communication with attester failed: {:#?}, retrying after 1s",
-                    error
+                    "Communication with attester failed (state {}): {:#?}, retrying after 1s",
+                    state, error
                 );
                 *state = State::Idle {
                     timeout: Some(get_time_ms() as u64 + 1000),
@@ -96,7 +111,9 @@ impl<'a> FobnailClient<'a> {
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle { .. } => unreachable!(),
+            State::InitDataReceived { .. } | State::Idle { .. } | State::VerifyMetadata { .. } => {
+                unreachable!()
+            }
         }
     }
 
@@ -153,9 +170,17 @@ impl<'a> FobnailClient<'a> {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 };
             }
+            State::RequestMetadata { .. } => {
+                error!("Failed to request metadata, retrying in 5s");
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                };
+            }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle { .. } => unreachable!(),
+            State::InitDataReceived { .. } | State::Idle { .. } | State::VerifyMetadata { .. } => {
+                unreachable!()
+            }
         }
 
         true
@@ -176,12 +201,23 @@ impl<'a> FobnailClient<'a> {
                         data: result.payload,
                     };
                 } else {
-                    error!("Server gave invalid response");
+                    error!("Server gave invalid response to init request");
+                }
+            }
+            State::RequestMetadata { .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::VerifyMetadata {
+                        metadata: result.payload,
+                    }
+                } else {
+                    error!("Server gave invalid response to metadata request");
                 }
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle { .. } => unreachable!(),
+            State::InitDataReceived { .. } | State::Idle { .. } | State::VerifyMetadata { .. } => {
+                unreachable!()
+            }
         }
     }
 }
