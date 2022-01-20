@@ -2,8 +2,8 @@ use littlefs2::const_ram_storage;
 use trussed::types::{LfsResult, LfsStorage};
 
 // Currently, we don't support persistent storage.
-const_ram_storage!(InternalStorage, 1024);
-const_ram_storage!(VolatileStorage, 1024);
+const_ram_storage!(InternalStorage, 4096);
+const_ram_storage!(VolatileStorage, 4096);
 // Currently, Trussed requires external storage with size of at least 1024
 // bytes.
 const_ram_storage!(ExternalStorage, 1024);
