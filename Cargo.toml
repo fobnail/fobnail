@@ -16,3 +16,6 @@ smoltcp = { version = "0.7.5", default-features = false, features = ["proto-ipv4
 [dependencies]
 log = { version = "0.4", default-features = false, features = ["max_level_trace"] }
 coap-lite = { version = "0.7", default-features = false }
+# Must be kept in sync with pal_nrf and pal_pc
+trussed = { git = "https://github.com/trussed-dev/trussed", rev = "c52e9c7a3a075bb143ae23e01e6ec78851d3a0b0" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }

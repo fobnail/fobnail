@@ -3,6 +3,7 @@ use core::cell::RefCell;
 use alloc::rc::Rc;
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use smoltcp::socket::{SocketRef, UdpSocket};
+use trussed::config::MAX_SIGNATURE_LENGTH;
 
 use crate::{
     coap::{CoapClient, Error},
@@ -10,20 +11,32 @@ use crate::{
 };
 use state::State;
 
+use self::crypto::Ed25519Key;
+
+mod crypto;
 mod metadata;
 mod state;
 
 /// Client which speaks to Fobnail server located on attester
 pub struct FobnailClient<'a> {
-    state: Rc<RefCell<State>>,
+    state: Rc<RefCell<State<'a>>>,
     coap_client: CoapClient<'a>,
+    trussed_platform: Rc<
+        RefCell<trussed::ClientImplementation<&'a mut trussed::Service<pal::trussed::Platform>>>,
+    >,
 }
 
 impl<'a> FobnailClient<'a> {
-    pub fn new(coap_client: CoapClient<'a>) -> Self {
+    pub fn new(
+        coap_client: CoapClient<'a>,
+        trussed_platform: trussed::ClientImplementation<
+            &'a mut trussed::Service<pal::trussed::Platform>,
+        >,
+    ) -> Self {
         Self {
             state: Rc::new(RefCell::new(State::default())),
             coap_client,
+            trussed_platform: Rc::new(RefCell::new(trussed_platform)),
         }
     }
 
@@ -69,9 +82,26 @@ impl<'a> FobnailClient<'a> {
 
                 *state = State::RequestMetadata {
                     request_pending: false,
+                    aik_pubkey: {
+                        // For now let's use hardcoded key.
+                        // This will be removed soon and key will be received
+                        // from attester.
+                        static KEY: &'static [u8] = &[
+                            0x4a, 0xd9, 0xd7, 0xfe, 0xba, 0x04, 0xb3, 0x83, 0xa1, 0x9d, 0x54, 0xd0,
+                            0x66, 0x1c, 0x97, 0x69, 0x58, 0x13, 0xb7, 0xdc, 0x24, 0x29, 0x09, 0x94,
+                            0xc7, 0xc7, 0xf9, 0x92, 0x39, 0x6e, 0x79, 0x24,
+                        ];
+                        Rc::new(Ed25519Key::load(
+                            Rc::clone(&self.trussed_platform),
+                            KEY,
+                            trussed::types::Location::Volatile,
+                        ))
+                    },
                 };
             }
-            State::RequestMetadata { request_pending } => {
+            State::RequestMetadata {
+                request_pending, ..
+            } => {
                 if !*request_pending {
                     *request_pending = true;
                     let mut request = coap_lite::CoapRequest::new();
@@ -82,8 +112,36 @@ impl<'a> FobnailClient<'a> {
                         .queue_request(request, move |result| Self::handle_response(result, state));
                 }
             }
-            State::VerifyMetadata { .. } => {
-                unimplemented!("metadata verification not implemented")
+            State::VerifyMetadata {
+                metadata,
+                aik_pubkey,
+            } => {
+                match Self::do_verify_metadata(
+                    &mut *self.trussed_platform.borrow_mut(),
+                    metadata,
+                    aik_pubkey,
+                ) {
+                    Ok(metadata) => {
+                        info!("Received attester metadata:");
+                        info!("  Version : {}", metadata.version);
+                        info!("  MAC     : {}", metadata.mac);
+                        info!("  Serial  : {}", metadata.sn);
+                        info!("  EK hash : {}", metadata.ek_hash.id);
+                        *state = State::StoreMetadata { metadata }
+                    }
+                    Err(_e) => {
+                        error!("Metadata invalid");
+                        *state = State::Idle {
+                            timeout: Some(get_time_ms() as u64 + 5000),
+                        }
+                    }
+                }
+            }
+            State::StoreMetadata { .. } => {
+                error!("Metadata storing is not implemented yet");
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                }
             }
         }
     }
@@ -111,7 +169,10 @@ impl<'a> FobnailClient<'a> {
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle { .. } | State::VerifyMetadata { .. } => {
+            State::InitDataReceived { .. }
+            | State::Idle { .. }
+            | State::VerifyMetadata { .. }
+            | State::StoreMetadata { .. } => {
                 unreachable!()
             }
         }
@@ -178,7 +239,10 @@ impl<'a> FobnailClient<'a> {
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle { .. } | State::VerifyMetadata { .. } => {
+            State::InitDataReceived { .. }
+            | State::Idle { .. }
+            | State::VerifyMetadata { .. }
+            | State::StoreMetadata { .. } => {
                 unreachable!()
             }
         }
@@ -202,21 +266,69 @@ impl<'a> FobnailClient<'a> {
                     };
                 } else {
                     error!("Server gave invalid response to init request");
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
                 }
             }
-            State::RequestMetadata { .. } => {
+            State::RequestMetadata { aik_pubkey, .. } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
                     *state = State::VerifyMetadata {
                         metadata: result.payload,
+                        aik_pubkey: Rc::clone(aik_pubkey),
                     }
                 } else {
                     error!("Server gave invalid response to metadata request");
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
                 }
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. } | State::Idle { .. } | State::VerifyMetadata { .. } => {
+            State::InitDataReceived { .. }
+            | State::Idle { .. }
+            | State::VerifyMetadata { .. }
+            | State::StoreMetadata { .. } => {
                 unreachable!()
+            }
+        }
+    }
+
+    fn do_verify_metadata<'r, T>(
+        trussed: &mut T,
+        metadata: &[u8],
+        key: &Ed25519Key,
+    ) -> Result<metadata::Metadata, ()>
+    where
+        T: trussed::client::Ed255,
+    {
+        let metadata_with_sig =
+            trussed::cbor_deserialize::<metadata::MetadataWithSignature>(metadata).unwrap();
+
+        if metadata_with_sig.signature.len() > MAX_SIGNATURE_LENGTH {
+            // If verify_ed255() is called with to big signature then Trussed
+            // will panic, so we need to handle that case ourselves.
+            error!("Signature size exceeds MAX_SIGNATURE_LENGTH");
+            return Err(());
+        }
+
+        match trussed::try_syscall!(trussed.verify_ed255(
+            key.key_id().clone(),
+            metadata_with_sig.encoded_metadata,
+            metadata_with_sig.signature,
+        )) {
+            Ok(v) if v.valid => Ok(trussed::cbor_deserialize::<metadata::Metadata>(
+                metadata_with_sig.encoded_metadata,
+            )
+            .unwrap()),
+            Ok(_) => {
+                error!("Metadata signature is invalid");
+                Err(())
+            }
+            Err(e) => {
+                error!("verify_ed255() failed: {:?}", e);
+                Err(())
             }
         }
     }
