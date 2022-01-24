@@ -10,15 +10,23 @@ nrf52840-hal = { path = "../../external/nrf-hal/nrf52840-hal", features = ["rt"]
 rtt-target = { version = "0.3.1", features = ["cortex-m"] }
 cortex-m = "0.7.3"
 cortex-m-rt = "0.7.0"
+cortex-m-rtic = "1"
 usb-device = "0.2.8"
 # TODO: after this crate gets published, it should be fetched from crates.io
 # instead of git
-usbd-ethernet = { git = "https://github.com/fobnail/usbd-ethernet", features = ["smoltcp_integration", "logging"] }
+# usbd-ethernet = { git = "https://github.com/fobnail/usbd-ethernet", features = ["smoltcp_integration", "logging"] }
+usbd-ethernet = { path="../../../usbd-ethernet", features = ["smoltcp_integration", "logging"] }
 
 smoltcp = { version = "0.7.5", default-features = false, features = ["proto-ipv4", "socket-udp", "ethernet", "log"] }
 log = { version = "0.4", default-features = false }
 
 linked_list_allocator = { version = "0.9.1", default-features = false, features = ["const_mut_refs"] }
+
+rand_core = { version = "0.6", default-features = false }
+chacha20 = { version = "0.8", features = ["rng"] }
+littlefs2 = "0.3"
+# Must be kept in with pal_nrf and pal_pc
+trussed = { git = "https://github.com/trussed-dev/trussed", rev = "c52e9c7a3a075bb143ae23e01e6ec78851d3a0b0" }
 
 [dependencies.embedded-hal]
 version = "0.2.6"

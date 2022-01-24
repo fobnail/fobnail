@@ -60,10 +60,13 @@ fn make_udp_socket(max_packet: usize, port: u16) -> UdpSocket<'static> {
     socket
 }
 
-#[cfg_attr(target_os = "none", pal::cortex_m_rt::entry)]
-fn main() -> ! {
-    pal::init();
-    let mut trussed_clients = pal::trussed::init(&["fobnail_client"]);
+#[cfg_attr(target_os = "none", no_mangle)]
+fn fw_main() -> ! {
+    //pal::init();
+
+    info!("Hello from main");
+
+    /*let mut trussed_clients = pal::trussed::init(&["fobnail_client"]);
     let trussed_fobnail_client = trussed_clients.pop().unwrap();
 
     let mut neighbor_cache_storage: [Option<(IpAddress, Neighbor)>; 16] = [None; 16];
@@ -95,6 +98,10 @@ fn main() -> ! {
     let mut fobnail_client = FobnailClient::new(coap_client, trussed_fobnail_client);
 
     loop {
+        pal::cortex_m::interrupt::free(|cs| {
+            pal::usb::usb_interrupt(cs);
+        });
+
         match iface.poll(
             &mut socket_set,
             Instant {
@@ -125,5 +132,12 @@ fn main() -> ! {
         fobnail_client.poll(socket_set.get::<UdpSocket>(coap_socket_handle));
 
         pal::cpu_relax();
+    }*/
+
+    loop {
+        /*pal::cortex_m::interrupt::free(|cs| {
+            pal::usb::usb_interrupt(cs);
+        });*/
+        pal::cpu_relax()
     }
 }

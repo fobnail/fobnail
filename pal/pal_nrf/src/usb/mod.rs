@@ -15,8 +15,8 @@ static mut USB_BUS: Option<UsbBusAllocator<Usbd<UsbPeripheral<'static>>>> = None
 static mut USB_DEV: Option<UsbDevice<'static, Usbd<UsbPeripheral<'static>>>> = None;
 static mut USB_EEM: Option<Mutex<EthernetDriver<Usbd<UsbPeripheral<'static>>>>> = None;
 
-static mut ETH_RX_BUF: [u8; EEM_BUFFER_SIZE as usize] = [0u8; EEM_BUFFER_SIZE as usize];
-static mut ETH_TX_BUF: [u8; EEM_BUFFER_SIZE as usize] = [0u8; EEM_BUFFER_SIZE as usize];
+pub(crate) static mut ETH_RX_BUF: [u8; EEM_BUFFER_SIZE as usize] = [0u8; EEM_BUFFER_SIZE as usize];
+pub(crate) static mut ETH_TX_BUF: [u8; EEM_BUFFER_SIZE as usize] = [0u8; EEM_BUFFER_SIZE as usize];
 
 pub fn init(usbd: USBD) {
     let usb_periph = UsbPeripheral::new(usbd, hfosc());
