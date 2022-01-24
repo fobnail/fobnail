@@ -1,6 +1,6 @@
-use core::cell::RefCell;
+use core::marker::PhantomData;
 
-use alloc::{boxed::Box, rc::Rc};
+use alloc::boxed::Box;
 use trussed::{
     client, syscall,
     types::{KeyId, Location},
@@ -10,23 +10,21 @@ use trussed::{
 /// all references are gone the key is removed.
 pub struct Ed25519Key<'a> {
     key_id: KeyId,
-    // Hack to avoid adding generic type T: client::Ed255. Otherwise structs
-    // using this type would have to annotate generics which in turn spreads to
-    // the parent struct all the way up.
-    drop_fn: Box<dyn Fn() + 'a>,
+    phantom: PhantomData<&'a ()>,
+    // We use boxed closure to avoid having to annotate generics on Ed25519Key
+    // struct, otherwise we would have to annotate them on all parent structs
+    // too.
+    drop_fn: Option<Box<dyn FnOnce(&KeyId) + 'a>>,
 }
 
 impl<'a> Ed25519Key<'a> {
-    pub fn load<T: client::Ed255 + 'a>(
-        trussed: Rc<RefCell<T>>,
-        raw_key: &[u8],
-        location: Location,
-    ) -> Self {
-        let trussed2 = Rc::clone(&trussed);
-
+    pub fn load<T, D>(trussed: &mut T, raw_key: &[u8], location: Location, drop_fn: D) -> Self
+    where
+        T: client::Ed255,
+        D: FnOnce(&KeyId) + 'a,
+    {
         let key_id = {
-            let mut b = trussed.borrow_mut();
-            let response = syscall!(b.deserialize_ed255_key(
+            let response = syscall!(trussed.deserialize_ed255_key(
                 raw_key,
                 trussed::types::KeySerialization::Raw,
                 trussed::types::StorageAttributes {
@@ -36,7 +34,7 @@ impl<'a> Ed25519Key<'a> {
 
             response.key
         };
-        let key_id2 = key_id.clone();
+
         debug!(
             "Loaded ed25519 key (ID {:?}) into {:?} memory",
             key_id, location
@@ -44,13 +42,8 @@ impl<'a> Ed25519Key<'a> {
 
         Self {
             key_id,
-            drop_fn: Box::new(move || {
-                let key_id = key_id2;
-                info!("Dropping key ID {:?}", key_id);
-
-                let mut trussed = trussed2.borrow_mut();
-                syscall!(trussed.delete(key_id));
-            }),
+            phantom: PhantomData,
+            drop_fn: Some(Box::new(drop_fn)),
         }
     }
 
@@ -62,7 +55,7 @@ impl<'a> Ed25519Key<'a> {
 
 impl Drop for Ed25519Key<'_> {
     fn drop(&mut self) {
-        let Self { drop_fn, .. } = self;
-        (drop_fn)();
+        let drop_fn = self.drop_fn.take().unwrap();
+        (drop_fn)(&self.key_id)
     }
 }

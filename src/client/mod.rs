@@ -21,17 +21,13 @@ mod state;
 pub struct FobnailClient<'a> {
     state: Rc<RefCell<State<'a>>>,
     coap_client: CoapClient<'a>,
-    trussed_platform: Rc<
-        RefCell<trussed::ClientImplementation<&'a mut trussed::Service<pal::trussed::Platform>>>,
-    >,
+    trussed_platform: Rc<RefCell<trussed::ClientImplementation<pal::trussed::Syscall>>>,
 }
 
 impl<'a> FobnailClient<'a> {
     pub fn new(
         coap_client: CoapClient<'a>,
-        trussed_platform: trussed::ClientImplementation<
-            &'a mut trussed::Service<pal::trussed::Platform>,
-        >,
+        trussed_platform: trussed::ClientImplementation<pal::trussed::Syscall>,
     ) -> Self {
         Self {
             state: Rc::new(RefCell::new(State::default())),
@@ -91,10 +87,20 @@ impl<'a> FobnailClient<'a> {
                             0x66, 0x1c, 0x97, 0x69, 0x58, 0x13, 0xb7, 0xdc, 0x24, 0x29, 0x09, 0x94,
                             0xc7, 0xc7, 0xf9, 0x92, 0x39, 0x6e, 0x79, 0x24,
                         ];
+                        let trussed_ref = Rc::clone(&self.trussed_platform);
                         Rc::new(Ed25519Key::load(
-                            Rc::clone(&self.trussed_platform),
+                            &mut *self.trussed_platform.borrow_mut(),
                             KEY,
                             trussed::types::Location::Volatile,
+                            move |id| {
+                                debug!("Dropping key id {:?}", id);
+                                let mut trussed = trussed_ref
+                                    .try_borrow_mut()
+                                    .expect("Failed to borrow Trussed client while freeing key");
+                                let trussed = &mut *trussed;
+                                trussed::client::CryptoClient::delete(trussed, id.clone())
+                                    .expect("Failed to delete key");
+                            },
                         ))
                     },
                 };
@@ -116,17 +122,20 @@ impl<'a> FobnailClient<'a> {
                 metadata,
                 aik_pubkey,
             } => {
-                match Self::do_verify_metadata(
-                    &mut *self.trussed_platform.borrow_mut(),
-                    metadata,
-                    aik_pubkey,
-                ) {
+                let mut trussed = self.trussed_platform.borrow_mut();
+
+                match Self::do_verify_metadata(&mut *trussed, metadata, aik_pubkey) {
                     Ok(metadata) => {
                         info!("Received attester metadata:");
                         info!("  Version : {}", metadata.version);
                         info!("  MAC     : {}", metadata.mac);
                         info!("  Serial  : {}", metadata.sn);
                         info!("  EK hash : {}", metadata.ek_hash.id);
+                        // Changing state will trigger destructor of AIK key,
+                        // removing it from Trussed keystore. Destructor calls
+                        // a closure which borrows trussed client, so we need to
+                        // release current borrow to avoid panic.
+                        drop(trussed);
                         *state = State::StoreMetadata { metadata }
                     }
                     Err(_e) => {
