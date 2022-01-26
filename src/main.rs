@@ -61,13 +61,14 @@ fn make_udp_socket(max_packet: usize, port: u16) -> UdpSocket<'static> {
 }
 
 #[cfg_attr(target_os = "none", no_mangle)]
-fn fw_main() -> ! {
-    //pal::init();
-
+fn fw_main(mut pal: pal::Pal<'static>) -> ! {
     info!("Hello from main");
 
-    /*let mut trussed_clients = pal::trussed::init(&["fobnail_client"]);
-    let trussed_fobnail_client = trussed_clients.pop().unwrap();
+    let mac_address = pal.get_ethernet_address();
+    let pal::Pal { eth } = pal;
+
+    //let mut trussed_clients = pal::trussed::init(&["fobnail_client"]);
+    //let trussed_fobnail_client = trussed_clients.pop().unwrap();
 
     let mut neighbor_cache_storage: [Option<(IpAddress, Neighbor)>; 16] = [None; 16];
     let neighbor_cache = NeighborCache::new(&mut neighbor_cache_storage[..]);
@@ -76,9 +77,8 @@ fn fw_main() -> ! {
 
     // Set Fobnail's IP address to 169.254.0.1
     let mut ip_addrs = [IpCidr::new(IpAddress::v4(169, 254, 0, 1), 16)];
-    let eth_phy = pal::ethernet::create_phy();
-    let mut iface = EthernetInterfaceBuilder::new(eth_phy)
-        .ethernet_addr(pal::ethernet::get_ethernet_address())
+    let mut iface = EthernetInterfaceBuilder::new(eth)
+        .ethernet_addr(mac_address)
         .neighbor_cache(neighbor_cache)
         .ip_addrs(&mut ip_addrs[..])
         .finalize();
@@ -94,20 +94,11 @@ fn fw_main() -> ! {
     let echo_socket_handle = socket_set.add(socket);
     let coap_socket_handle = socket_set.add(coap_socket);
 
-    let coap_client = CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT);
-    let mut fobnail_client = FobnailClient::new(coap_client, trussed_fobnail_client);
+    //let coap_client = CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT);
+    //let mut fobnail_client = FobnailClient::new(coap_client, trussed_fobnail_client);
 
     loop {
-        pal::cortex_m::interrupt::free(|cs| {
-            pal::usb::usb_interrupt(cs);
-        });
-
-        match iface.poll(
-            &mut socket_set,
-            Instant {
-                millis: pal::timer::get_time_ms(),
-            },
-        ) {
+        match iface.poll(&mut socket_set, Instant { millis: 0 }) {
             Ok(true) => {}
             Ok(false) => {}
             Err(_) => {}
@@ -129,15 +120,8 @@ fn fw_main() -> ! {
         }
 
         // CoAP poll
-        fobnail_client.poll(socket_set.get::<UdpSocket>(coap_socket_handle));
+        //fobnail_client.poll(socket_set.get::<UdpSocket>(coap_socket_handle));
 
         pal::cpu_relax();
-    }*/
-
-    loop {
-        /*pal::cortex_m::interrupt::free(|cs| {
-            pal::usb::usb_interrupt(cs);
-        });*/
-        pal::cpu_relax()
     }
 }

@@ -7,7 +7,7 @@ use alloc::{
 };
 use coap_lite::{CoapRequest, MessageClass, MessageType, Packet};
 pub use error::*;
-use pal::timer::get_time_ms;
+//use pal::timer::get_time_ms;
 use smoltcp::{
     socket::{SocketRef, UdpSocket},
     wire::{IpAddress, IpEndpoint},
@@ -232,7 +232,8 @@ impl<'a> CoapClient<'a> {
                     let mut request = self.queue.pop_front().unwrap();
                     if let Some(confirmable) = request.confirmable.as_mut() {
                         let token = confirmable.token;
-                        confirmable.send_time = get_time_ms() as u64;
+                        //confirmable.send_time = get_time_ms() as u64;
+                        confirmable.send_time = 0;
 
                         if self.wait_queue.insert(token, request).is_some() {
                             // This should never happen
@@ -300,7 +301,7 @@ impl<'a> CoapClient<'a> {
     }
 
     fn check_timeouts(&mut self) {
-        let now = get_time_ms() as u64;
+        let now = 0;
 
         loop {
             let mut timed_out = None;

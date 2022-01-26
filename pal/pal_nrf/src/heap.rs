@@ -54,9 +54,9 @@ fn oom_handler(layout: Layout) -> ! {
     panic!("Out of memory");
 }
 
-pub fn init() {
+pub(crate) unsafe fn init() {
     const HEAP_SIZE: usize = 16384;
 
     let base = cortex_m_rt::heap_start();
-    unsafe { ALLOCATOR.init(base as usize, HEAP_SIZE) };
+    ALLOCATOR.init(base as usize, HEAP_SIZE);
 }

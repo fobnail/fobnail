@@ -5,7 +5,6 @@ use core::cell::RefCell;
 use littlefs2::path::PathBuf;
 use trussed::{service::SeedableRng, ClientImplementation, Interchange, Service};
 
-pub(crate) mod drivers;
 mod store;
 
 trussed::platform!(
@@ -33,13 +32,7 @@ impl trussed::platform::Syscall for Syscall {
 
 /// Initialize Trussed platform and create clients.
 pub fn init(client_names: &[&str]) -> Vec<ClientImplementation<Syscall>> {
-    let drivers::Drivers { rng } = unsafe {
-        drivers::DRIVERS
-            .take()
-            .expect("Drivers required by Trussed not initialized")
-    };
-
-    let rng = chacha20::ChaCha8Rng::from_rng(rng).unwrap();
+    /*let rng = chacha20::ChaCha8Rng::from_rng(rng).unwrap();
     let store = store::init();
     let ui = UserInterface;
     let platform = Platform::new(rng, store, ui);
@@ -51,7 +44,8 @@ pub fn init(client_names: &[&str]) -> Vec<ClientImplementation<Syscall>> {
         clients.push(client);
     }
 
-    clients
+    clients*/
+    todo!()
 }
 
 fn create_client(

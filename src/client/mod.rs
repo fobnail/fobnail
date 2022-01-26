@@ -5,10 +5,12 @@ use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::config::MAX_SIGNATURE_LENGTH;
 
-use crate::{
-    coap::{CoapClient, Error},
-    pal::timer::get_time_ms,
-};
+use crate::coap::{CoapClient, Error};
+
+fn get_time_ms() -> u64 {
+    0
+}
+
 use state::State;
 
 use self::crypto::Ed25519Key;
