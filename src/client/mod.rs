@@ -126,8 +126,8 @@ impl<'a> FobnailClient<'a> {
             } => {
                 let mut trussed = self.trussed_platform.borrow_mut();
 
-                match Self::do_verify_metadata(&mut *trussed, metadata, aik_pubkey) {
-                    Ok(metadata) => {
+                match Self::do_verify_metadata_signature(&mut *trussed, metadata, aik_pubkey) {
+                    Ok((metadata, hash)) => {
                         info!("Received attester metadata:");
                         info!("  Version : {}", metadata.version);
                         info!("  MAC     : {}", metadata.mac);
@@ -138,7 +138,14 @@ impl<'a> FobnailClient<'a> {
                         // a closure which borrows trussed client, so we need to
                         // release current borrow to avoid panic.
                         drop(trussed);
-                        *state = State::StoreMetadata { metadata }
+
+                        if Self::do_verify_metadata(&metadata) {
+                            *state = State::StoreMetadata { metadata, hash }
+                        } else {
+                            *state = State::Idle {
+                                timeout: Some(get_time_ms() as u64 + 5000),
+                            }
+                        }
                     }
                     Err(_e) => {
                         error!("Metadata invalid");
@@ -306,16 +313,22 @@ impl<'a> FobnailClient<'a> {
         }
     }
 
-    fn do_verify_metadata<'r, T>(
+    /// Verify cryptographic signature of metadata.
+    fn do_verify_metadata_signature<'r, T>(
         trussed: &mut T,
         metadata: &[u8],
         key: &Ed25519Key,
-    ) -> Result<metadata::Metadata, ()>
+    ) -> Result<(metadata::Metadata, trussed::Bytes<128>), ()>
     where
-        T: trussed::client::Ed255,
+        T: trussed::client::Ed255 + trussed::client::Sha256,
     {
-        let metadata_with_sig =
-            trussed::cbor_deserialize::<metadata::MetadataWithSignature>(metadata).unwrap();
+        let metadata_with_sig = trussed::cbor_deserialize::<metadata::MetadataWithSignature>(
+            metadata,
+        )
+        .map_err(|_| {
+            error!("Metadata deserialization failed");
+            ()
+        })?;
 
         if metadata_with_sig.signature.len() > MAX_SIGNATURE_LENGTH {
             // If verify_ed255() is called with to big signature then Trussed
@@ -329,10 +342,19 @@ impl<'a> FobnailClient<'a> {
             metadata_with_sig.encoded_metadata,
             metadata_with_sig.signature,
         )) {
-            Ok(v) if v.valid => Ok(trussed::cbor_deserialize::<metadata::Metadata>(
-                metadata_with_sig.encoded_metadata,
-            )
-            .unwrap()),
+            Ok(v) if v.valid => {
+                let sha =
+                    trussed::try_syscall!(trussed.hash_sha256(metadata_with_sig.encoded_metadata))
+                        .map_err(|e| {
+                            error!("Failed to compute SHA-256: {:?}", e);
+                        })?;
+
+                let meta = trussed::cbor_deserialize::<metadata::Metadata>(
+                    metadata_with_sig.encoded_metadata,
+                )
+                .map_err(|_| error!("Metadata deserialization failed"))?;
+                Ok((meta, sha.hash))
+            }
             Ok(_) => {
                 error!("Metadata signature is invalid");
                 Err(())
@@ -342,5 +364,34 @@ impl<'a> FobnailClient<'a> {
                 Err(())
             }
         }
+    }
+
+    /// Verify correctness of the metadata itself.
+    fn do_verify_metadata(metadata: &metadata::Metadata) -> bool {
+        if metadata.version != metadata::CURRENT_VERSION {
+            error!(
+                "Unsupported metadata version {}, expected version {}",
+                metadata.version,
+                metadata::CURRENT_VERSION
+            );
+            return false;
+        }
+
+        let expected_hash_len = match metadata.ek_hash.id {
+            metadata::HashType::SHA1 => 20,
+            metadata::HashType::SHA256 => 32,
+            metadata::HashType::SHA512 => 64,
+        };
+        if metadata.ek_hash.hash.len() != expected_hash_len {
+            error!(
+                "Invalid EK cert hash, expected hash with length of {} bytes (type {}) but got {}.",
+                expected_hash_len,
+                metadata.ek_hash.id,
+                metadata.ek_hash.hash.len()
+            );
+            return false;
+        }
+
+        true
     }
 }

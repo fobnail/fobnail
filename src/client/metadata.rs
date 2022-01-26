@@ -2,6 +2,8 @@ use alloc::vec::Vec;
 use core::fmt;
 use serde::Deserialize;
 
+pub const CURRENT_VERSION: u8 = 1;
+
 #[derive(Deserialize)]
 pub struct MacAddress(pub [u8; 6]);
 

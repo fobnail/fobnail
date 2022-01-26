@@ -7,14 +7,10 @@ use super::metadata::Metadata;
 
 pub enum State<'a> {
     /// Repeat hello request until server responds.
-    Init {
-        request_pending: bool,
-    },
+    Init { request_pending: bool },
 
     /// State after receiving init data.
-    InitDataReceived {
-        data: Vec<u8>,
-    },
+    InitDataReceived { data: Vec<u8> },
 
     // TODO: before requesting metadata we must request AIK (Attestation
     // Identity Key) key, receive it and verify.
@@ -36,12 +32,12 @@ pub enum State<'a> {
     // TODO: implement this, must store metadata in persistent storage.
     StoreMetadata {
         metadata: Metadata,
+        /// Hash of metadata
+        hash: trussed::Bytes<128>,
     },
 
     /// Idle state with optional timeout. After timeout resets into Init state.
-    Idle {
-        timeout: Option<u64>,
-    },
+    Idle { timeout: Option<u64> },
 }
 
 impl Default for State<'_> {
