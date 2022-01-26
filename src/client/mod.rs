@@ -98,8 +98,10 @@ impl<'a> FobnailClient<'a> {
                                     .try_borrow_mut()
                                     .expect("Failed to borrow Trussed client while freeing key");
                                 let trussed = &mut *trussed;
-                                trussed::client::CryptoClient::delete(trussed, id.clone())
-                                    .expect("Failed to delete key");
+                                trussed::syscall!(trussed::client::CryptoClient::delete(
+                                    trussed,
+                                    id.clone()
+                                ));
                             },
                         ))
                     },

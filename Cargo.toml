@@ -17,5 +17,31 @@ smoltcp = { version = "0.7.5", default-features = false, features = ["proto-ipv4
 log = { version = "0.4", default-features = false, features = ["max_level_trace"] }
 coap-lite = { version = "0.7", default-features = false }
 # Must be kept in sync with pal_nrf and pal_pc
-trussed = { git = "https://github.com/trussed-dev/trussed", rev = "c52e9c7a3a075bb143ae23e01e6ec78851d3a0b0" }
+trussed = { path = "external/trussed" }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+
+[profile.dev]
+lto = "thin"
+
+[profile.dev.package]
+# Trussed dependencies
+trussed = { opt-level = "z" }
+aes = { opt-level = "z" }
+# blake2 = { opt-level = "z" }
+block-modes = { opt-level = "z" }
+chacha20 = { opt-level = "z" }
+chacha20poly1305 = { opt-level = "z" }
+des = { opt-level = "z" }
+hmac = { opt-level = "z" }
+sha-1 = { opt-level = "z" }
+sha2 = { opt-level = "z" }
+
+cosey = { opt-level = "z" }
+delog = { opt-level = "z" }
+cbor-smol = { opt-level = "z" }
+heapless-bytes = { opt-level = "z" }
+interchange = { opt-level = "z" }
+littlefs2 = { opt-level = "z" }
+p256-cortex-m4 = { opt-level = "z" }
+salty = { opt-level = "z" }
+serde-indexed = { opt-level = "z" }

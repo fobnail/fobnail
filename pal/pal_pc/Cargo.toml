@@ -13,4 +13,4 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 chacha20 = { version = "0.8", features = ["rng"] }
 littlefs2 = "0.3"
 # Must be kept in with pal_nrf and pal_pc
-trussed = { git = "https://github.com/trussed-dev/trussed", rev = "c52e9c7a3a075bb143ae23e01e6ec78851d3a0b0" }
+trussed = { path = "../../external/trussed" }

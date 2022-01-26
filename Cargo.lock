@@ -876,14 +876,18 @@ dependencies = [
 name = "pal_nrf"
 version = "0.1.0"
 dependencies = [
+ "chacha20 0.8.1",
  "cortex-m",
  "cortex-m-rt",
  "embedded-hal",
  "linked_list_allocator",
+ "littlefs2",
  "log",
  "nrf52840-hal",
+ "rand_core",
  "rtt-target",
  "smoltcp",
+ "trussed",
  "usb-device",
  "usbd-ethernet",
 ]
@@ -1237,7 +1241,6 @@ dependencies = [
 [[package]]
 name = "trussed"
 version = "0.1.0"
-source = "git+https://github.com/trussed-dev/trussed?rev=c52e9c7a3a075bb143ae23e01e6ec78851d3a0b0#c52e9c7a3a075bb143ae23e01e6ec78851d3a0b0"
 dependencies = [
  "aes",
  "bitflags",
