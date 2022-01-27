@@ -1,9 +1,12 @@
 use core::cell::RefCell;
 
-use alloc::rc::Rc;
+use alloc::{rc::Rc, string::String};
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use smoltcp::socket::{SocketRef, UdpSocket};
-use trussed::config::MAX_SIGNATURE_LENGTH;
+use trussed::{
+    config::MAX_SIGNATURE_LENGTH,
+    types::{Location, Message, PathBuf},
+};
 
 use crate::{
     coap::{CoapClient, Error},
@@ -91,7 +94,7 @@ impl<'a> FobnailClient<'a> {
                         Rc::new(Ed25519Key::load(
                             &mut *self.trussed_platform.borrow_mut(),
                             KEY,
-                            trussed::types::Location::Volatile,
+                            Location::Volatile,
                             move |id| {
                                 debug!("Dropping key id {:?}", id);
                                 let mut trussed = trussed_ref
@@ -155,8 +158,13 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
-            State::StoreMetadata { .. } => {
+            State::StoreMetadata { hash, .. } => {
                 error!("Metadata storing is not implemented yet");
+                let mut trussed = self.trussed_platform.borrow_mut();
+                Self::store_metadata_hash(
+                    &mut *trussed,
+                    hash.as_slice().try_into().expect("Invalid hash length"),
+                );
                 *state = State::Idle {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 }
@@ -314,7 +322,7 @@ impl<'a> FobnailClient<'a> {
     }
 
     /// Verify cryptographic signature of metadata.
-    fn do_verify_metadata_signature<'r, T>(
+    fn do_verify_metadata_signature<T>(
         trussed: &mut T,
         metadata: &[u8],
         key: &Ed25519Key,
@@ -393,5 +401,37 @@ impl<'a> FobnailClient<'a> {
         }
 
         true
+    }
+
+    fn format_hash_path(hash: &[u8]) -> String {
+        use core::fmt;
+
+        struct Writer<'a>(&'a [u8]);
+        impl fmt::Display for Writer<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                for &x in self.0 {
+                    write!(f, "{:02x}", x)?;
+                }
+                Ok(())
+            }
+        }
+        format!("/meta/{}", Writer(hash))
+    }
+
+    /// Store SHA-256 hash into non-volatile memory.
+    fn store_metadata_hash<T>(trussed: &mut T, hash: &[u8; 32])
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        // Use filesystem as a database:
+        // Hash is stored by creating an empty file with a name like this:
+        // /meta/8784060ad4fd3d48a494e4db8051b8e56fbdd30b16f9a8c040e5ed1943d06edd
+
+        let data = Message::new();
+        let path = Self::format_hash_path(hash);
+        debug!("Writing {}", path);
+
+        let path = PathBuf::from(path.as_str());
+        trussed::syscall!(trussed.write_file(Location::Internal, path, data, None));
     }
 }
