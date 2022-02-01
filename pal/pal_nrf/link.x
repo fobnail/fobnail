@@ -5,7 +5,7 @@ SECTIONS {
     # Storage must be aligned on erase block size (4096), otherwise firmware
     # could corrupt itself when erase/write cycle got interrupted.
     #
-    .storage (LENGTH(FLASH) - STORAGE_SIZE) (NOLOAD) : {
+    .storage (LENGTH(FLASH) - STORAGE_SIZE) : {
         PROVIDE(__persistent_storage_start = .);
         FILL(0xffff);
         . += STORAGE_SIZE;
