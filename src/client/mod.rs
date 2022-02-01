@@ -159,12 +159,14 @@ impl<'a> FobnailClient<'a> {
                 }
             }
             State::StoreMetadata { hash, .. } => {
-                error!("Metadata storing is not implemented yet");
                 let mut trussed = self.trussed_platform.borrow_mut();
-                Self::store_metadata_hash(
-                    &mut *trussed,
-                    hash.as_slice().try_into().expect("Invalid hash length"),
-                );
+                let hash = hash.as_slice().try_into().expect("Invalid hash length");
+                if !Self::have_metadata_hash(&mut *trussed, hash) {
+                    Self::store_metadata_hash(&mut *trussed, hash);
+                } else {
+                    debug!("/meta/{} already in DB", Self::format_hash(hash));
+                }
+
                 *state = State::Idle {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 }
@@ -403,7 +405,7 @@ impl<'a> FobnailClient<'a> {
         true
     }
 
-    fn format_hash_path(hash: &[u8]) -> String {
+    fn format_hash(hash: &[u8]) -> String {
         use core::fmt;
 
         struct Writer<'a>(&'a [u8]);
@@ -415,7 +417,22 @@ impl<'a> FobnailClient<'a> {
                 Ok(())
             }
         }
-        format!("/meta/{}", Writer(hash))
+        format!("{}", Writer(hash))
+    }
+
+    /// Checks whether metadata hash is already stored
+    fn have_metadata_hash<T>(trussed: &mut T, hash: &[u8; 32]) -> bool
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        let hash = Self::format_hash(hash);
+        let dir = PathBuf::from(b"/meta/");
+        let r = trussed::syscall!(trussed.locate_file(
+            Location::Internal,
+            Some(dir),
+            PathBuf::from(hash.as_str())
+        ));
+        r.path.is_some()
     }
 
     /// Store SHA-256 hash into non-volatile memory.
@@ -428,7 +445,8 @@ impl<'a> FobnailClient<'a> {
         // /meta/8784060ad4fd3d48a494e4db8051b8e56fbdd30b16f9a8c040e5ed1943d06edd
 
         let data = Message::new();
-        let path = Self::format_hash_path(hash);
+        let hash = Self::format_hash(hash);
+        let path = format!("/meta/{}", hash);
         debug!("Writing {}", path);
 
         let path = PathBuf::from(path.as_str());
