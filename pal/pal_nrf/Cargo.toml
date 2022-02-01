@@ -6,6 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# TODO: currently we are using HAL from https://github.com/ia0/nrf-hal/tree/better_nvmc
+# because current implementation of NOR flash read/write/erase function was so broken
+# that it was unusable, after this https://github.com/nrf-rs/nrf-hal/pull/374/
+# gets merged and new release cames out we should update this.
 nrf52840-hal = { path = "../../external/nrf-hal/nrf52840-hal", features = ["rt"] }
 rtt-target = { version = "0.3.1", features = ["cortex-m"] }
 cortex-m = "0.7.3"
@@ -23,6 +27,8 @@ linked_list_allocator = { version = "0.9.1", default-features = false, features 
 rand_core = { version = "0.6", default-features = false }
 chacha20 = { version = "0.8", features = ["rng"] }
 littlefs2 = "0.3"
+embedded-storage = "0.2"
+
 # Must be kept in sync with pal_nrf and pal_pc
 [dependencies.trussed]
 path = "../../external/trussed"

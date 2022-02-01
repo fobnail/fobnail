@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "nrf-hal-common"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "cast",
  "cfg-if",
@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "nrf52840-hal"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "embedded-hal",
  "nrf-hal-common",
@@ -880,6 +880,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "embedded-hal",
+ "embedded-storage",
  "linked_list_allocator",
  "littlefs2",
  "log",

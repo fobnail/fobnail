@@ -33,11 +33,11 @@ impl trussed::platform::Syscall for Syscall {
 
 /// Initialize Trussed platform and create clients.
 pub fn init(client_names: &[&str]) -> Vec<ClientImplementation<Syscall>> {
-    let drivers::Drivers { rng } = unsafe { drivers::get() };
+    let drivers::Drivers { rng, nvmc } = unsafe { drivers::get() };
     let rng = hal::Rng::new(rng);
 
     let rng = chacha20::ChaCha8Rng::from_rng(rng).unwrap();
-    let store = store::init();
+    let store = unsafe { store::init(nvmc) };
     let ui = UserInterface;
     let platform = Platform::new(rng, store, ui);
     let service = Rc::new(RefCell::new(Service::new(platform)));

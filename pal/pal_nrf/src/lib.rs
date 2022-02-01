@@ -64,7 +64,8 @@ pub fn init() {
     unsafe { HFOSC = Some(clocks.enable_ext_hfosc()) };
 
     let rng = periph.RNG;
-    unsafe { trussed::drivers::init(rng) };
+    let nvmc = periph.NVMC;
+    unsafe { trussed::drivers::init(rng, nvmc) };
 
     let port0 = gpio::p0::Parts::new(periph.P0);
 
