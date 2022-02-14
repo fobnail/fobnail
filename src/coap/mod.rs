@@ -79,7 +79,10 @@ impl<'a> CoapClient<'a> {
     pub const COAP_DEFAULT_PORT: u16 = 5683;
     pub const DEFAULT_TIMEOUT: u64 = 1000; // 1 second
     /// Default block size when using blockwise transfers. Must be power-of-two.
-    pub const DEFAULT_BLOCK_SIZE: u32 = 1024;
+    /// FIXME: when using 1024 block size network tends to lockup - processing
+    /// of all packets fails with
+    /// cannot process ingress packet: buffer space exhausted
+    pub const DEFAULT_BLOCK_SIZE: u32 = 512;
 
     /// Creates new client instance
     pub fn new(server_addr: IpAddress, port: u16) -> Self {
