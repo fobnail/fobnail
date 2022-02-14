@@ -1,5 +1,7 @@
 #![no_std]
 #![cfg_attr(target_os = "none", no_main)]
+// Used by CoAP client, refer to coap/mod.rs for more information.
+#![feature(int_log)]
 
 #[cfg(target_os = "none")]
 extern crate pal_nrf as pal;
