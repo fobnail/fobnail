@@ -20,6 +20,9 @@ coap-lite = { version = "0.7", default-features = false }
 trussed = { path = "external/trussed" }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 rsa = { version = "0.5", default-features = false, features = ["alloc"] }
+x509 = { path = "external/formats/x509" }
+x501 = { path = "external/formats/x501" }
+der = { path = "external/formats/der" }
 
 [profile.dev]
 lto = "thin"

@@ -23,6 +23,7 @@ use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 use coap::CoapClient;
 
+mod certmgr;
 mod client;
 mod coap;
 
