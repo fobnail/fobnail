@@ -84,6 +84,7 @@ pub fn init() {
     );
 
     // configure TIMER2 to be used for delays
+    // configure TIMER3 as a freerunning monotonic counter
     timer::init(
         Timer::one_shot(periph.TIMER2),
         Timer::one_shot(periph.TIMER3),

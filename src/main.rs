@@ -34,8 +34,8 @@ const ECHO_SERVER_BUF_LEN: usize = 512;
 // need.
 const COAP_CLIENT_BUF_LEN: usize = 1500;
 
-// FIXME: should not use hardcoded server addresses, instead server should be
-// discovered
+// FIXME: server should have IP address assigned by using DHCP server located in
+// Fobnail token
 const SERVER_IP_ADDRESS: IpAddress = IpAddress::Ipv4(Ipv4Address::new(169, 254, 0, 8));
 
 // Client also needs a port to be able to communicate with server. Usually local
