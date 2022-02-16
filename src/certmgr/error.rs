@@ -1,0 +1,26 @@
+use core::fmt::Display;
+
+pub type Result<T> = ::core::result::Result<T, Error>;
+
+// TODO: consider using thiserror when support for no_std lands
+// https://github.com/dtolnay/thiserror/pull/64
+
+pub enum Error {
+    X509(x509::der::Error),
+    CustomStatic(&'static str),
+}
+
+impl From<x509::der::Error> for Error {
+    fn from(e: x509::der::Error) -> Self {
+        Error::X509(e)
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::X509(e) => e.fmt(f),
+            Self::CustomStatic(e) => e.fmt(f),
+        }
+    }
+}

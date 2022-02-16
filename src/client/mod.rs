@@ -10,15 +10,13 @@ use trussed::{
 };
 
 use crate::{
+    certmgr::{CertMgr, X509Certificate},
     coap::{CoapClient, Error},
     pal::timer::get_time_ms,
 };
 use state::State;
 
-use self::{
-    crypto::{Ed25519Key, RsaKey},
-    proto::AikKey,
-};
+use self::{crypto::RsaKey, proto::AikKey};
 
 mod crypto;
 mod proto;
@@ -98,6 +96,32 @@ impl<'a> FobnailClient<'a> {
                     let state = Rc::clone(&self.state);
                     self.coap_client
                         .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::VerifyEkCertificate { data } => {
+                let mut trussed = self.trussed_platform.borrow_mut();
+
+                let certmgr = CertMgr;
+                match certmgr.load_cert(&data) {
+                    Ok(cert) => match Self::verify_ek_certificate(&cert, &mut *trussed) {
+                        Ok(()) => {
+                            *state = State::RequestAik {
+                                request_pending: false,
+                            };
+                        }
+                        Err(e) => {
+                            error!("Failed to verify EK certificate: {}", e);
+                            *state = State::Idle {
+                                timeout: Some(get_time_ms() as u64 + 5000),
+                            };
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to load EK certificate: {}", e);
+                        *state = State::Idle {
+                            timeout: Some(get_time_ms() as u64 + 5000),
+                        };
+                    }
                 }
             }
             State::RequestAik {
@@ -205,6 +229,7 @@ impl<'a> FobnailClient<'a> {
             // get responses.
             State::InitDataReceived { .. }
             | State::Idle { .. }
+            | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
             | State::StoreMetadata { .. } => {
                 unreachable!()
@@ -287,6 +312,7 @@ impl<'a> FobnailClient<'a> {
             // get responses.
             State::InitDataReceived { .. }
             | State::Idle { .. }
+            | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
             | State::StoreMetadata { .. } => {
                 unreachable!()
@@ -319,8 +345,16 @@ impl<'a> FobnailClient<'a> {
             }
             State::RequestEkCert { .. } => {
                 info!("Received EK certificate");
-                *state = State::RequestAik {
-                    request_pending: false,
+
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::VerifyEkCertificate {
+                        data: result.payload,
+                    }
+                } else {
+                    error!("Server gave invalid response to EK request");
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
                 }
             }
             State::RequestAik { .. } => {
@@ -387,6 +421,7 @@ impl<'a> FobnailClient<'a> {
             // get responses.
             State::InitDataReceived { .. }
             | State::Idle { .. }
+            | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
             | State::StoreMetadata { .. } => {
                 unreachable!()
@@ -449,13 +484,34 @@ impl<'a> FobnailClient<'a> {
                 }
             }
             crypto::Key::Rsa(key) => {
-                let hash = trussed::syscall!(trussed.hash(
+                let sha = trussed::try_syscall!(trussed.hash(
                     Mechanism::Sha256,
                     trussed::Bytes::from_slice(metadata_with_sig.encoded_metadata).unwrap(),
-                ));
+                ))
+                .map_err(|e| {
+                    error!("Failed to compute SHA-256: {:?}", e);
+                })?;
                 // Currently, Trussed does not provide RSA support so we use
                 // rsa crate directly.
-                todo!()
+                match key.inner.verify(
+                    rsa::PaddingScheme::PKCS1v15Sign {
+                        hash: Some(rsa::Hash::SHA2_256),
+                    },
+                    &sha.hash,
+                    metadata_with_sig.signature,
+                ) {
+                    Ok(_) => {
+                        let meta = trussed::cbor_deserialize::<proto::Metadata>(
+                            metadata_with_sig.encoded_metadata,
+                        )
+                        .map_err(|_| error!("Metadata deserialization failed"))?;
+                        Ok((meta, sha.hash))
+                    }
+                    Err(e) => {
+                        error!("Metadata signature verification failed: {}", e);
+                        Err(())
+                    }
+                }
             }
         }
     }
@@ -535,6 +591,22 @@ impl<'a> FobnailClient<'a> {
 
         let path = PathBuf::from(path.as_str());
         trussed::syscall!(trussed.write_file(Location::Internal, path, data, None));
+    }
+
+    fn verify_ek_certificate<T>(
+        cert: &X509Certificate,
+        trussed: &mut T,
+    ) -> crate::certmgr::Result<()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        info!("X.509 version {}", cert.version());
+        let issuer = cert.issuer()?;
+        info!("Issuer: {}", issuer);
+        let subject = cert.subject()?;
+        info!("Subject: {}", subject);
+
+        Ok(())
     }
 
     fn verify_aik(aik: &AikKey) -> Result<(), ()> {
