@@ -21,6 +21,11 @@ pub enum State<'a> {
         request_pending: bool,
     },
 
+    /// Verify EK certificate chain
+    VerifyEkCertificate {
+        data: Vec<u8>,
+    },
+
     RequestAik {
         request_pending: bool,
     },
@@ -69,6 +74,7 @@ impl fmt::Display for State<'_> {
             Self::Init { .. } => write!(f, "init"),
             Self::InitDataReceived { .. } => write!(f, "init data received"),
             Self::RequestEkCert { .. } => write!(f, "request EK cert"),
+            Self::VerifyEkCertificate { .. } => write!(f, "verify EK cert"),
             Self::RequestAik { .. } => write!(f, "request aik"),
             Self::RequestMetadata { .. } => write!(f, "request metadata"),
             Self::VerifyMetadata { .. } => write!(f, "verify metadata"),
