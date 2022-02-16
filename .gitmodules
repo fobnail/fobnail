@@ -4,3 +4,6 @@
 [submodule "external/trussed"]
 	path = external/trussed
 	url = https://github.com/trussed-dev/trussed
+[submodule "external/formats"]
+	path = external/formats
+	url = https://github.com/RustCrypto/formats
