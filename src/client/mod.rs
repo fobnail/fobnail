@@ -350,7 +350,7 @@ impl<'a> FobnailClient<'a> {
                                 }
                             },
                             n => {
-                                error!("Unsupported RSA key size {}", n);
+                                error!("Unsupported RSA key size {}", n * 8);
                                 *state = State::Idle {
                                     timeout: Some(get_time_ms() as u64 + 5000),
                                 };
@@ -559,6 +559,7 @@ impl<'a> FobnailClient<'a> {
     }
 
     fn verify_aik(aik: &AikKey) -> Result<(), ()> {
+        debug!("\n{:#04x?}\n", aik);
         Ok(())
     }
 }
