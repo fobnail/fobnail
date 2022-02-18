@@ -81,9 +81,9 @@ pub struct MetadataWithSignature<'a> {
     pub signature: &'a [u8],
 }
 
-#[derive(Deserialize)]
-pub struct RsaKey {
-    pub n: Vec<u8>,
+#[derive(Debug, Deserialize)]
+pub struct RsaKey<'a> {
+    pub n: &'a [u8],
     pub e: u32,
 }
 
@@ -94,13 +94,14 @@ pub enum KeyType {
     Rsa = 1,
 }
 
-#[derive(Deserialize)]
-pub struct AikKey {
+#[derive(Debug, Deserialize)]
+pub struct AikKey<'a> {
     #[serde(rename = "type")]
     pub key_type: KeyType,
     // cbor-smol (used by Trussed) does not implement `deserialize_any` so we
     // can't deserialize enums.
     // For now we need RSA only, and probably we won't any other keys for a long
     // time.
-    pub key: RsaKey,
+    #[serde(borrow)]
+    pub key: RsaKey<'a>,
 }
