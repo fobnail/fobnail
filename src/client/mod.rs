@@ -102,26 +102,28 @@ impl<'a> FobnailClient<'a> {
                 let mut trussed = self.trussed_platform.borrow_mut();
 
                 let certmgr = CertMgr;
-                match certmgr.load_cert(&data) {
-                    Ok(cert) => match Self::verify_ek_certificate(&cert, &mut *trussed) {
-                        Ok(()) => {
-                            *state = State::RequestAik {
-                                request_pending: false,
-                            };
-                        }
+                let ok = match certmgr.load_cert(&data) {
+                    Ok(cert) => match Self::verify_ek_certificate(&certmgr, &cert, &mut *trussed) {
+                        Ok(()) => true,
                         Err(e) => {
                             error!("Failed to verify EK certificate: {}", e);
-                            *state = State::Idle {
-                                timeout: Some(get_time_ms() as u64 + 5000),
-                            };
+                            false
                         }
                     },
                     Err(e) => {
                         error!("Failed to load EK certificate: {}", e);
-                        *state = State::Idle {
-                            timeout: Some(get_time_ms() as u64 + 5000),
-                        };
+                        false
                     }
+                };
+
+                if ok {
+                    *state = State::RequestAik {
+                        request_pending: false,
+                    };
+                } else {
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
                 }
             }
             State::RequestAik {
@@ -594,6 +596,7 @@ impl<'a> FobnailClient<'a> {
     }
 
     fn verify_ek_certificate<T>(
+        certmgr: &CertMgr,
         cert: &X509Certificate,
         trussed: &mut T,
     ) -> crate::certmgr::Result<()>
@@ -605,6 +608,10 @@ impl<'a> FobnailClient<'a> {
         info!("Issuer: {}", issuer);
         let subject = cert.subject()?;
         info!("Subject: {}", subject);
+        let key = cert.key()?;
+        info!("Key: {}", key);
+
+        certmgr.verify(trussed, cert)?;
 
         Ok(())
     }

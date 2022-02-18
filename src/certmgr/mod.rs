@@ -1,7 +1,13 @@
 pub use self::error::*;
+pub use self::key::*;
+pub use self::signature::*;
 pub use self::x509::*;
 
 mod error;
+mod key;
+mod signature;
+mod store;
+mod verify;
 mod x509;
 
 pub struct CertMgr;
