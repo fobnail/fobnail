@@ -1,0 +1,197 @@
+use std::{
+    cell::RefCell,
+    fs::{File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+};
+
+use anyhow::Context;
+use clap::Parser;
+use littlefs2::{
+    consts::{U16, U512},
+    fs::{Allocation, FileType, Filesystem, ReadDirAllocation},
+    io::Result as LfsResult,
+};
+
+#[derive(Parser)]
+struct Options {
+    #[clap(short, long)]
+    file: PathBuf,
+
+    #[clap(subcommand)]
+    command: Command,
+}
+
+#[derive(Parser)]
+enum Command {
+    Dir {
+        path: PathBuf,
+    },
+    Mkdir {
+        path: PathBuf,
+        #[clap(short, long)]
+        recursive: bool,
+    },
+    Del {
+        path: PathBuf,
+    },
+    CopyTo {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+}
+
+fn main() -> anyhow::Result<()> {
+    let options = Options::parse();
+
+    let mut flash = Flash::new(
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&options.file)
+            .context("Failed to open flash")?,
+    );
+    let mut alloc = Allocation::new();
+    let fs = Filesystem::mount(&mut alloc, &mut flash).unwrap();
+
+    match options.command {
+        Command::Dir { path } => {
+            list_directory(&fs, &path)?;
+        }
+        Command::Mkdir { path, recursive } => {
+            make_directory(&fs, &path, recursive)?;
+        }
+        Command::Del { path } => {
+            del(&fs, &path)?;
+        }
+        Command::CopyTo {
+            source,
+            destination,
+        } => {
+            copy_to(&fs, &source, &destination)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn path_to_lfs_path(path: &Path) -> littlefs2::path::PathBuf {
+    littlefs2::path::PathBuf::from(path.to_str().unwrap())
+}
+
+fn list_directory(fs: &Filesystem<Flash>, path: &Path) -> anyhow::Result<()> {
+    let mut alloc = ReadDirAllocation::new();
+    let it = unsafe { fs.read_dir(&mut alloc, &path_to_lfs_path(&path)) }.unwrap();
+    for f in it {
+        let f = f.unwrap();
+
+        match f.file_type() {
+            FileType::Dir => {
+                println!("  {:10} {}", "<DIR>", f.file_name())
+            }
+            FileType::File => {
+                println!("  {:10} {}", f.metadata().len(), f.file_name())
+            }
+        }
+    }
+    Ok(())
+}
+
+fn make_directory(fs: &Filesystem<Flash>, path: &Path, recursive: bool) -> anyhow::Result<()> {
+    if recursive {
+        fs.create_dir_all(&path_to_lfs_path(&path)).unwrap()
+    } else {
+        fs.create_dir(&path_to_lfs_path(&path)).unwrap();
+    }
+    Ok(())
+}
+
+fn del(fs: &Filesystem<Flash>, path: &Path) -> anyhow::Result<()> {
+    fs.remove(&path_to_lfs_path(path)).unwrap();
+    Ok(())
+}
+
+fn copy_to(fs: &Filesystem<Flash>, source: &Path, destination: &Path) -> anyhow::Result<()> {
+    let mut src = OpenOptions::new().read(true).write(false).open(&source)?;
+    let file_size = src.metadata()?.len();
+    let mut data = vec![0u8; file_size.try_into().unwrap()];
+    src.read_exact(&mut data[..])?;
+
+    fs.open_file_with_options_and_then(
+        |opt| opt.create(true).write(true),
+        &path_to_lfs_path(destination),
+        |d| {
+            let mut written = 0;
+            let mut left = data.len();
+            while left > 0 {
+                let n = d
+                    .write(&data[written..written + left])
+                    .expect(&format!("Wrote {} bytes out of {}", written, file_size));
+                if n == 0 {
+                    panic!("Wrote {} bytes out of {}", written, file_size);
+                }
+                written += n;
+                left -= n;
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    Ok(())
+}
+
+struct Flash {
+    file: RefCell<File>,
+}
+
+impl Flash {
+    pub fn new(file: File) -> Self {
+        Self {
+            file: RefCell::new(file),
+        }
+    }
+}
+
+impl littlefs2::driver::Storage for Flash {
+    // Emulate flash with similar parameters to these found on nRF52840.
+    const READ_SIZE: usize = 4;
+    const WRITE_SIZE: usize = 4;
+
+    // Must be kept in-sync with definitions from pal_pc and pal_nrf for this
+    // tool to work.
+    const BLOCK_SIZE: usize = 4096;
+    const BLOCK_COUNT: usize = 16;
+
+    // We don't need wear-leveling on PC.
+    const BLOCK_CYCLES: isize = -1;
+
+    type CACHE_SIZE = U512;
+    type LOOKAHEADWORDS_SIZE = U16;
+
+    fn read(&self, off: usize, buf: &mut [u8]) -> LfsResult<usize> {
+        // For let's just unwrap errors, we assume that littlefs won't call us
+        // with some weird requests and that I/O operations are infallible.
+        // If needed this may be extended into a correct error handling.
+
+        let mut file = self.file.borrow_mut();
+        file.seek(SeekFrom::Start(off.try_into().unwrap())).unwrap();
+        Ok(file.read(buf).unwrap())
+    }
+
+    fn write(&mut self, off: usize, buf: &[u8]) -> LfsResult<usize> {
+        let mut file = self.file.borrow_mut();
+        file.seek(SeekFrom::Start(off.try_into().unwrap())).unwrap();
+        Ok(file.write(buf).unwrap())
+    }
+
+    fn erase(&mut self, off: usize, len: usize) -> LfsResult<usize> {
+        // Use the same erase polarity as nRF flash has.
+        let pattern: u8 = 0xff;
+        let buf = vec![pattern; len];
+
+        let mut file = self.file.borrow_mut();
+        file.seek(SeekFrom::Start(off.try_into().unwrap())).unwrap();
+        Ok(file.write(&buf[..]).unwrap())
+    }
+}
