@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(alloc_error_handler)]
 
 extern crate nrf52840_hal as hal;
 
@@ -21,6 +22,7 @@ use hal::Clocks;
 use hal::Timer;
 
 pub mod ethernet;
+mod heap;
 mod led;
 mod logger;
 mod panic;
@@ -52,6 +54,7 @@ fn TIMER0() {
 pub fn init() {
     rtt_target::rtt_init_print!();
     logger::init();
+    heap::init();
 
     let periph = hal::pac::Peripherals::take().unwrap();
     let clocks = Clocks::new(periph.CLOCK);
@@ -81,7 +84,11 @@ pub fn init() {
     );
 
     // configure TIMER2 to be used for delays
-    timer::init(Timer::one_shot(periph.TIMER2));
+    // configure TIMER3 as a freerunning monotonic counter
+    timer::init(
+        Timer::one_shot(periph.TIMER2),
+        Timer::one_shot(periph.TIMER3),
+    );
 
     usb::init(periph.USBD);
 

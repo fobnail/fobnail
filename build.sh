@@ -52,6 +52,7 @@ done
 [ -n "${target}" ] || target="pc"
 
 cargo_command="build"
+RUSTFLAGS=""
 
 if [ "${target}" == "pc" ]; then
     cargo_target="x86_64-unknown-linux-gnu"
@@ -60,6 +61,7 @@ if [ "${target}" == "pc" ]; then
     fi
 elif [ "${target}" == "nrf" ]; then
     cargo_target="thumbv7em-none-eabihf"
+    RUSTFLAGS="-C link-arg=-Tlink.x"
     if [ -n "${run}" ]; then
         cargo_command="embed"
     fi
@@ -90,6 +92,7 @@ docker run --privileged \
     -v $dir/.temp/cargo:/home/build/.cargo \
     -w /home/build/fobnail \
     -e FOBNAIL_LOG=$FOBNAIL_LOG \
+    -e RUSTFLAGS="${RUSTFLAGS}" \
     --net=host \
     --init \
     3mdeb/fobnail-sdk \

@@ -18,6 +18,8 @@ usbd-ethernet = { git = "https://github.com/fobnail/usbd-ethernet", features = [
 smoltcp = { version = "0.7.5", default-features = false, features = ["proto-ipv4", "socket-udp", "ethernet", "log"] }
 log = { version = "0.4", default-features = false }
 
+linked_list_allocator = { version = "0.9.1", default-features = false, features = ["const_mut_refs"] }
+
 [dependencies.embedded-hal]
 version = "0.2.6"
 default-features = false
