@@ -2,10 +2,11 @@ use core::cell::RefCell;
 
 use alloc::{rc::Rc, string::String};
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
+use rsa::PublicKey as _;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
     config::MAX_SIGNATURE_LENGTH,
-    types::{Location, Message, PathBuf},
+    types::{Location, Mechanism, Message, PathBuf},
 };
 
 use crate::{
@@ -14,10 +15,13 @@ use crate::{
 };
 use state::State;
 
-use self::crypto::Ed25519Key;
+use self::{
+    crypto::{Ed25519Key, RsaKey},
+    proto::AikKey,
+};
 
 mod crypto;
-mod metadata;
+mod proto;
 mod state;
 
 /// Client which speaks to Fobnail server located on attester
@@ -79,36 +83,35 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
 
-                *state = State::RequestMetadata {
+                *state = State::RequestEkCert {
                     request_pending: false,
-                    aik_pubkey: {
-                        // For now let's use hardcoded key.
-                        // This will be removed soon and key will be received
-                        // from attester.
-                        static KEY: &'static [u8] = &[
-                            0x4a, 0xd9, 0xd7, 0xfe, 0xba, 0x04, 0xb3, 0x83, 0xa1, 0x9d, 0x54, 0xd0,
-                            0x66, 0x1c, 0x97, 0x69, 0x58, 0x13, 0xb7, 0xdc, 0x24, 0x29, 0x09, 0x94,
-                            0xc7, 0xc7, 0xf9, 0x92, 0x39, 0x6e, 0x79, 0x24,
-                        ];
-                        let trussed_ref = Rc::clone(&self.trussed_platform);
-                        Rc::new(Ed25519Key::load(
-                            &mut *self.trussed_platform.borrow_mut(),
-                            KEY,
-                            Location::Volatile,
-                            move |id| {
-                                debug!("Dropping key id {:?}", id);
-                                let mut trussed = trussed_ref
-                                    .try_borrow_mut()
-                                    .expect("Failed to borrow Trussed client while freeing key");
-                                let trussed = &mut *trussed;
-                                trussed::syscall!(trussed::client::CryptoClient::delete(
-                                    trussed,
-                                    id.clone()
-                                ));
-                            },
-                        ))
-                    },
-                };
+                }
+            }
+            State::RequestEkCert {
+                ref mut request_pending,
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/ek");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::RequestAik {
+                ref mut request_pending,
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/aik");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                }
             }
             State::RequestMetadata {
                 request_pending, ..
@@ -186,7 +189,10 @@ impl<'a> FobnailClient<'a> {
         let state = &*state;
         let state = &mut *state.borrow_mut();
         match state {
-            State::Init { .. } | State::RequestMetadata { .. } => {
+            State::Init { .. }
+            | State::RequestMetadata { .. }
+            | State::RequestAik { .. }
+            | State::RequestEkCert { .. } => {
                 error!(
                     "Communication with attester failed (state {}): {:#?}, retrying after 1s",
                     state, error
@@ -259,6 +265,18 @@ impl<'a> FobnailClient<'a> {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 };
             }
+            State::RequestEkCert { .. } => {
+                error!("Failed to request EK certificate, retrying in 5s");
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                }
+            }
+            State::RequestAik { .. } => {
+                error!("Failed to request AIK key, retrying in 5s");
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                }
+            }
             State::RequestMetadata { .. } => {
                 error!("Failed to request metadata, retrying in 5s");
                 *state = State::Idle {
@@ -299,6 +317,59 @@ impl<'a> FobnailClient<'a> {
                     };
                 }
             }
+            State::RequestEkCert { .. } => {
+                info!("Received EK certificate");
+                *state = State::RequestAik {
+                    request_pending: false,
+                }
+            }
+            State::RequestAik { .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    let key = trussed::cbor_deserialize::<proto::AikKey>(&result.payload).unwrap();
+                    match key.key_type {
+                        proto::KeyType::Rsa => match key.key.n.len() * 8 {
+                            1024 | 2048 | 4096 | 8192 => match Self::verify_aik(&key) {
+                                Ok(()) => match RsaKey::load(&key.key.n, key.key.e) {
+                                    Ok(key) => {
+                                        *state = State::RequestMetadata {
+                                            request_pending: false,
+                                            aik_pubkey: Rc::new(crypto::Key::Rsa(key)),
+                                        }
+                                    }
+                                    Err(_) => {
+                                        *state = State::Idle {
+                                            timeout: Some(get_time_ms() as u64 + 5000),
+                                        };
+                                    }
+                                },
+                                Err(()) => {
+                                    error!("AIK verification failed");
+                                    *state = State::Idle {
+                                        timeout: Some(get_time_ms() as u64 + 5000),
+                                    };
+                                }
+                            },
+                            n => {
+                                error!("Unsupported RSA key size {}", n);
+                                *state = State::Idle {
+                                    timeout: Some(get_time_ms() as u64 + 5000),
+                                };
+                            }
+                        },
+                        t => {
+                            error!("Unsupported key type {:?}", t);
+                            *state = State::Idle {
+                                timeout: Some(get_time_ms() as u64 + 5000),
+                            };
+                        }
+                    }
+                } else {
+                    error!("Server gave invalid response to AIK request");
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
+                }
+            }
             State::RequestMetadata { aik_pubkey, .. } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
                     *state = State::VerifyMetadata {
@@ -327,18 +398,16 @@ impl<'a> FobnailClient<'a> {
     fn do_verify_metadata_signature<T>(
         trussed: &mut T,
         metadata: &[u8],
-        key: &Ed25519Key,
-    ) -> Result<(metadata::Metadata, trussed::Bytes<128>), ()>
+        key: &crypto::Key,
+    ) -> Result<(proto::Metadata, trussed::Bytes<128>), ()>
     where
         T: trussed::client::Ed255 + trussed::client::Sha256,
     {
-        let metadata_with_sig = trussed::cbor_deserialize::<metadata::MetadataWithSignature>(
-            metadata,
-        )
-        .map_err(|_| {
-            error!("Metadata deserialization failed");
-            ()
-        })?;
+        let metadata_with_sig = trussed::cbor_deserialize::<proto::MetadataWithSignature>(metadata)
+            .map_err(|_| {
+                error!("Metadata deserialization failed");
+                ()
+            })?;
 
         if metadata_with_sig.signature.len() > MAX_SIGNATURE_LENGTH {
             // If verify_ed255() is called with to big signature then Trussed
@@ -347,50 +416,86 @@ impl<'a> FobnailClient<'a> {
             return Err(());
         }
 
-        match trussed::try_syscall!(trussed.verify_ed255(
-            key.key_id().clone(),
-            metadata_with_sig.encoded_metadata,
-            metadata_with_sig.signature,
-        )) {
-            Ok(v) if v.valid => {
-                let sha =
-                    trussed::try_syscall!(trussed.hash_sha256(metadata_with_sig.encoded_metadata))
+        // We expect SHA256 for RSA and SHA512 for Ed25519
+        match key {
+            crypto::Key::Ed25519(key) => {
+                match trussed::try_syscall!(trussed.verify_ed255(
+                    key.key_id().clone(),
+                    metadata_with_sig.encoded_metadata,
+                    metadata_with_sig.signature,
+                )) {
+                    Ok(v) if v.valid => {
+                        let sha = trussed::try_syscall!(
+                            trussed.hash_sha256(metadata_with_sig.encoded_metadata)
+                        )
                         .map_err(|e| {
                             error!("Failed to compute SHA-256: {:?}", e);
                         })?;
 
-                let meta = trussed::cbor_deserialize::<metadata::Metadata>(
-                    metadata_with_sig.encoded_metadata,
-                )
-                .map_err(|_| error!("Metadata deserialization failed"))?;
-                Ok((meta, sha.hash))
+                        let meta = trussed::cbor_deserialize::<proto::Metadata>(
+                            metadata_with_sig.encoded_metadata,
+                        )
+                        .map_err(|_| error!("Metadata deserialization failed"))?;
+                        Ok((meta, sha.hash))
+                    }
+                    Ok(_) => {
+                        error!("Metadata signature is invalid");
+                        Err(())
+                    }
+                    Err(e) => {
+                        error!("verify_ed255() failed: {:?}", e);
+                        Err(())
+                    }
+                }
             }
-            Ok(_) => {
-                error!("Metadata signature is invalid");
-                Err(())
-            }
-            Err(e) => {
-                error!("verify_ed255() failed: {:?}", e);
-                Err(())
+            crypto::Key::Rsa(key) => {
+                let sha = trussed::try_syscall!(trussed.hash(
+                    Mechanism::Sha256,
+                    trussed::Bytes::from_slice(metadata_with_sig.encoded_metadata).unwrap(),
+                ))
+                .map_err(|e| {
+                    error!("Failed to compute SHA-256: {:?}", e);
+                })?;
+                // Currently, Trussed does not provide RSA support so we use
+                // rsa crate directly.
+                match key.inner.verify(
+                    rsa::PaddingScheme::PKCS1v15Sign {
+                        hash: Some(rsa::Hash::SHA2_256),
+                    },
+                    &sha.hash,
+                    metadata_with_sig.signature,
+                ) {
+                    Ok(_) => {
+                        let meta = trussed::cbor_deserialize::<proto::Metadata>(
+                            metadata_with_sig.encoded_metadata,
+                        )
+                        .map_err(|_| error!("Metadata deserialization failed"))?;
+                        Ok((meta, sha.hash))
+                    }
+                    Err(e) => {
+                        error!("Metadata signature verification failed: {}", e);
+                        Err(())
+                    }
+                }
             }
         }
     }
 
     /// Verify correctness of the metadata itself.
-    fn do_verify_metadata(metadata: &metadata::Metadata) -> bool {
-        if metadata.version != metadata::CURRENT_VERSION {
+    fn do_verify_metadata(metadata: &proto::Metadata) -> bool {
+        if metadata.version != proto::CURRENT_VERSION {
             error!(
                 "Unsupported metadata version {}, expected version {}",
                 metadata.version,
-                metadata::CURRENT_VERSION
+                proto::CURRENT_VERSION
             );
             return false;
         }
 
         let expected_hash_len = match metadata.ek_hash.id {
-            metadata::HashType::SHA1 => 20,
-            metadata::HashType::SHA256 => 32,
-            metadata::HashType::SHA512 => 64,
+            proto::HashType::SHA1 => 20,
+            proto::HashType::SHA256 => 32,
+            proto::HashType::SHA512 => 64,
         };
         if metadata.ek_hash.hash.len() != expected_hash_len {
             error!(
@@ -451,5 +556,9 @@ impl<'a> FobnailClient<'a> {
 
         let path = PathBuf::from(path.as_str());
         trussed::syscall!(trussed.write_file(Location::Internal, path, data, None));
+    }
+
+    fn verify_aik(aik: &AikKey) -> Result<(), ()> {
+        Ok(())
     }
 }
