@@ -2,15 +2,28 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use super::crypto::Ed25519Key;
-use super::metadata::Metadata;
+use super::crypto::Key;
+use super::proto::Metadata;
 
 pub enum State<'a> {
     /// Repeat hello request until server responds.
-    Init { request_pending: bool },
+    Init {
+        request_pending: bool,
+    },
 
     /// State after receiving init data.
-    InitDataReceived { data: Vec<u8> },
+    InitDataReceived {
+        data: Vec<u8>,
+    },
+
+    /// Send request to obtain EK certificate
+    RequestEkCert {
+        request_pending: bool,
+    },
+
+    RequestAik {
+        request_pending: bool,
+    },
 
     // TODO: before requesting metadata we must request AIK (Attestation
     // Identity Key) key, receive it and verify.
@@ -18,14 +31,14 @@ pub enum State<'a> {
     // InitDataReceived and RequestMetadata
     /// Send metadata request and wait for response.
     RequestMetadata {
-        aik_pubkey: Rc<Ed25519Key<'a>>,
+        aik_pubkey: Rc<Key<'a>>,
         request_pending: bool,
     },
 
     /// Verify whether metadata has been properly with the Attestation Identity
     /// Key.
     VerifyMetadata {
-        aik_pubkey: Rc<Ed25519Key<'a>>,
+        aik_pubkey: Rc<Key<'a>>,
         metadata: Vec<u8>,
     },
 
@@ -37,7 +50,9 @@ pub enum State<'a> {
     },
 
     /// Idle state with optional timeout. After timeout resets into Init state.
-    Idle { timeout: Option<u64> },
+    Idle {
+        timeout: Option<u64>,
+    },
 }
 
 impl Default for State<'_> {
@@ -53,6 +68,8 @@ impl fmt::Display for State<'_> {
         match self {
             Self::Init { .. } => write!(f, "init"),
             Self::InitDataReceived { .. } => write!(f, "init data received"),
+            Self::RequestEkCert { .. } => write!(f, "request EK cert"),
+            Self::RequestAik { .. } => write!(f, "request aik"),
             Self::RequestMetadata { .. } => write!(f, "request metadata"),
             Self::VerifyMetadata { .. } => write!(f, "verify metadata"),
             Self::StoreMetadata { .. } => write!(f, "store metadata"),
