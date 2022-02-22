@@ -104,4 +104,5 @@ pub struct AikKey<'a> {
     // time.
     #[serde(borrow)]
     pub key: RsaKey<'a>,
+    pub loaded_key_name: &'a [u8],
 }
