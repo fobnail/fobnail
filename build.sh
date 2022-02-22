@@ -85,16 +85,6 @@ dir=$(dirname $(readlink -f ${BASH_SOURCE[0]}))
 
 mkdir -p $dir/.temp/cargo
 
-docker run --privileged \
-    --rm -it \
-    -v $dir:/home/build/fobnail \
-    -v /dev:/dev \
-    -v $dir/.temp/cargo:/home/build/.cargo \
-    -w /home/build/fobnail \
-    -e FOBNAIL_FLASH=target/flash.bin \
-    -e FOBNAIL_LOG=$FOBNAIL_LOG \
-    -e RUSTFLAGS="${RUSTFLAGS}" \
-    --net=host \
-    --init \
-    3mdeb/fobnail-sdk \
-    /bin/bash -i -c "${full_cmd}"
+export FOBNAIL_SDK_DOCKER_EXTRA_OPTS="-v $dir/.temp/cargo:/home/builder/.cargo"
+
+run-fobnail-sdk.sh ${full_cmd}
