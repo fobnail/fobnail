@@ -9,7 +9,7 @@ use anyhow::Context;
 use clap::Parser;
 use littlefs2::{
     consts::{U16, U512},
-    fs::{Allocation, FileType, Filesystem, ReadDirAllocation},
+    fs::{Allocation, Attribute, FileType, Filesystem, ReadDirAllocation},
     io::Result as LfsResult,
 };
 
@@ -38,6 +38,15 @@ enum Command {
     CopyTo {
         source: PathBuf,
         destination: PathBuf,
+    },
+    SetAttr {
+        path: PathBuf,
+        id: u8,
+        data: u8,
+    },
+    GetAttr {
+        path: PathBuf,
+        id: u8,
     },
 }
 
@@ -69,6 +78,24 @@ fn main() -> anyhow::Result<()> {
             destination,
         } => {
             copy_to(&fs, &source, &destination)?;
+        }
+        Command::SetAttr { path, id, data } => {
+            setattr(&fs, &path, id, &[data])?;
+        }
+        Command::GetAttr { id, path } => {
+            if let Some(attr) = getattr(&fs, &path, id)? {
+                let data = attr.data();
+                for (i, b) in data.iter().enumerate() {
+                    if i >= 16 && i % 16 == 0 {
+                        println!()
+                    }
+
+                    print!("{:02X} ", b)
+                }
+                println!()
+            } else {
+                anyhow::bail!("No such attribute");
+            }
         }
     }
 
@@ -139,6 +166,18 @@ fn copy_to(fs: &Filesystem<Flash>, source: &Path, destination: &Path) -> anyhow:
     .unwrap();
 
     Ok(())
+}
+
+fn setattr(fs: &Filesystem<Flash>, path: &Path, id: u8, data: &[u8]) -> anyhow::Result<()> {
+    let mut attr = Attribute::new(id);
+    attr.set_data(data);
+    fs.set_attribute(&path_to_lfs_path(&path), &attr).unwrap();
+
+    Ok(())
+}
+
+fn getattr(fs: &Filesystem<Flash>, path: &Path, id: u8) -> anyhow::Result<Option<Attribute>> {
+    Ok(fs.attribute(&path_to_lfs_path(&path), id).unwrap())
 }
 
 struct Flash {
