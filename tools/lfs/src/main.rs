@@ -230,7 +230,7 @@ impl littlefs2::driver::Storage for Flash {
     // Must be kept in-sync with definitions from pal_pc and pal_nrf for this
     // tool to work.
     const BLOCK_SIZE: usize = 4096;
-    const BLOCK_COUNT: usize = 16;
+    const BLOCK_COUNT: usize = 32;
 
     // We don't need wear-leveling on PC.
     const BLOCK_CYCLES: isize = -1;
