@@ -112,7 +112,9 @@ fn main() -> anyhow::Result<()> {
             reinstall,
         } => {
             for path in &path {
-                cert::install(&fs, &path, trusted, reinstall)?;
+                if let Err(e) = cert::install(&fs, &path, trusted, reinstall) {
+                    println!("Failed to install {}: {}", path.display(), e);
+                }
             }
         }
     }
