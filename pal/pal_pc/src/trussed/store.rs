@@ -63,9 +63,11 @@ impl littlefs2::driver::Storage for Flash {
     const READ_SIZE: usize = 4;
     const WRITE_SIZE: usize = 4;
 
-    // For now let's use 64 KiB only, may be extended when needed.
+    // 64 KiB is not enough - LittleFS wastes much of available storage
+    // see https://github.com/littlefs-project/littlefs/issues/645
+    // increase size to 128 KiB
     const BLOCK_SIZE: usize = 4096;
-    const BLOCK_COUNT: usize = 16;
+    const BLOCK_COUNT: usize = 32;
 
     // We don't need wear-leveling on PC.
     const BLOCK_CYCLES: isize = -1;
