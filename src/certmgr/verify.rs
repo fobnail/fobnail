@@ -83,7 +83,7 @@ impl CertMgr {
                 return Err(Error::ExceededRecursionLimit);
             }
 
-            match Self::get_parent_id(certificate)? {
+            match Self::get_parent_id(current_child.get())? {
                 Match::Exact(_) => todo!(),
                 Match::NonExact(organization) => {
                     let mut found_parent = None;
