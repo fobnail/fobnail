@@ -196,25 +196,27 @@ impl<'a> X509Certificate<'a> {
         Ok(raw.tbs_certificate)
     }
 
+    /// Returns an array of X.509v3 extensions.
+    pub fn extensions(&self) -> Option<&x509::Extensions> {
+        self.inner.tbs_certificate.extensions.as_ref()
+    }
+
+    /// Lookups X.509v3 extensions by its OID.
+    pub fn extension(&self, oid: ObjectIdentifier) -> Option<&x509::Extension> {
+        self.extensions()?.iter().find(|x| x.extn_id == oid)
+    }
+
     /// Obtain X.509v3 Authority Key Identifier
     pub fn authority_key_id(&self) -> Option<&[u8]> {
-        let extensions = self.inner.tbs_certificate.extensions.as_ref()?;
-        let key_id = extensions
-            .iter()
-            .find(|ext| ext.extn_id == ObjectIdentifier::new("2.5.29.35"))?;
-
-        let key_id = AuthorityKeyIdentifier::from_der(key_id.extn_value).ok()?;
+        let extension = self.extension(ObjectIdentifier::new("2.5.29.35"))?;
+        let key_id = AuthorityKeyIdentifier::from_der(extension.extn_value).ok()?;
         Some(key_id.key_identifier?.as_bytes())
     }
 
     /// Obtain X.509v3 Subject Key Identifier
     pub fn subject_key_id(&self) -> Option<&[u8]> {
-        let extensions = self.inner.tbs_certificate.extensions.as_ref()?;
-        let key_id = extensions
-            .iter()
-            .find(|ext| ext.extn_id == ObjectIdentifier::new("2.5.29.14"))?;
-
-        let key_id = SubjectKeyIdentifier::from_der(key_id.extn_value).ok()?;
+        let extension = self.extension(ObjectIdentifier::new("2.5.29.14"))?;
+        let key_id = SubjectKeyIdentifier::from_der(extension.extn_value).ok()?;
         Some(key_id.as_bytes())
     }
 }
