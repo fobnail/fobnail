@@ -409,16 +409,16 @@ impl<'a> FobnailClient<'a> {
                 ()
             })?;
 
-        if metadata_with_sig.signature.len() > MAX_SIGNATURE_LENGTH {
-            // If verify_ed255() is called with to big signature then Trussed
-            // will panic, so we need to handle that case ourselves.
-            error!("Signature size exceeds MAX_SIGNATURE_LENGTH");
-            return Err(());
-        }
-
         // We expect SHA256 for RSA and SHA512 for Ed25519
         match key {
             crypto::Key::Ed25519(key) => {
+                if metadata_with_sig.signature.len() > MAX_SIGNATURE_LENGTH {
+                    // If verify_ed255() is called with to big signature then Trussed
+                    // will panic, so we need to handle that case ourselves.
+                    error!("Signature size exceeds MAX_SIGNATURE_LENGTH");
+                    return Err(());
+                }
+
                 match trussed::try_syscall!(trussed.verify_ed255(
                     key.key_id().clone(),
                     metadata_with_sig.encoded_metadata,
