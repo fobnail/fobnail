@@ -9,3 +9,6 @@ edition = "2021"
 clap = { version = "3", features = ["derive"] }
 littlefs2 = "0.3"
 anyhow = "1"
+x509-parser = "0.13"
+pem = "1"
+sha2 = "0.10"

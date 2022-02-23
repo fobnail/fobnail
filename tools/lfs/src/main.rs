@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod cert;
+
 use anyhow::Context;
 use clap::Parser;
 use littlefs2::{
@@ -47,6 +49,13 @@ enum Command {
     GetAttr {
         path: PathBuf,
         id: u8,
+    },
+    InstallCertificate {
+        #[clap(long)]
+        trusted: bool,
+        #[clap(long)]
+        reinstall: bool,
+        path: Vec<PathBuf>,
     },
 }
 
@@ -97,6 +106,15 @@ fn main() -> anyhow::Result<()> {
                 anyhow::bail!("No such attribute");
             }
         }
+        Command::InstallCertificate {
+            path,
+            trusted,
+            reinstall,
+        } => {
+            for path in &path {
+                cert::install(&fs, &path, trusted, reinstall)?;
+            }
+        }
     }
 
     Ok(())
@@ -138,24 +156,25 @@ fn del(fs: &Filesystem<Flash>, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn copy_to(fs: &Filesystem<Flash>, source: &Path, destination: &Path) -> anyhow::Result<()> {
-    let mut src = OpenOptions::new().read(true).write(false).open(&source)?;
-    let file_size = src.metadata()?.len();
-    let mut data = vec![0u8; file_size.try_into().unwrap()];
-    src.read_exact(&mut data[..])?;
-
+pub fn write_file(
+    fs: &Filesystem<Flash>,
+    path: &littlefs2::path::Path,
+    data: &[u8],
+) -> anyhow::Result<()> {
     fs.open_file_with_options_and_then(
         |opt| opt.create(true).write(true),
-        &path_to_lfs_path(destination),
+        path,
         |d| {
             let mut written = 0;
             let mut left = data.len();
             while left > 0 {
-                let n = d
-                    .write(&data[written..written + left])
-                    .expect(&format!("Wrote {} bytes out of {}", written, file_size));
+                let n = d.write(&data[written..written + left]).expect(&format!(
+                    "Wrote {} bytes out of {}",
+                    written,
+                    data.len()
+                ));
                 if n == 0 {
-                    panic!("Wrote {} bytes out of {}", written, file_size);
+                    panic!("Wrote {} bytes out of {}", written, data.len());
                 }
                 written += n;
                 left -= n;
@@ -164,6 +183,17 @@ fn copy_to(fs: &Filesystem<Flash>, source: &Path, destination: &Path) -> anyhow:
         },
     )
     .unwrap();
+
+    Ok(())
+}
+
+fn copy_to(fs: &Filesystem<Flash>, source: &Path, destination: &Path) -> anyhow::Result<()> {
+    let mut src = OpenOptions::new().read(true).write(false).open(&source)?;
+    let file_size = src.metadata()?.len();
+    let mut data = vec![0u8; file_size.try_into().unwrap()];
+    src.read_exact(&mut data[..])?;
+
+    write_file(fs, &path_to_lfs_path(destination), &data)?;
 
     Ok(())
 }
@@ -180,7 +210,7 @@ fn getattr(fs: &Filesystem<Flash>, path: &Path, id: u8) -> anyhow::Result<Option
     Ok(fs.attribute(&path_to_lfs_path(&path), id).unwrap())
 }
 
-struct Flash {
+pub struct Flash {
     file: RefCell<File>,
 }
 
