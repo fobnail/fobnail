@@ -13,6 +13,7 @@ pub enum Error {
     ExceededRecursionLimit,
     IssuerNotFound,
     UntrustedSelfSignedCert,
+    UnsupportedCriticalExtension,
 }
 
 impl From<x509::der::Error> for Error {
@@ -36,6 +37,7 @@ impl Display for Error {
             Self::ExceededRecursionLimit => write!(f, "exceeded recursion limit"),
             Self::IssuerNotFound => write!(f, "no issuer certicate found"),
             Self::UntrustedSelfSignedCert => write!(f, "untrusted self-signed certificate"),
+            Self::UnsupportedCriticalExtension => write!(f, "unsupported critical extension"),
         }
     }
 }

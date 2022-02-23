@@ -1,8 +1,12 @@
 use alloc::vec::Vec;
+use der::Decodable;
+use x509::ObjectIdentifier;
 
 use super::{CertMgr, Error, Result, X509Certificate};
 use crate::certmgr::HashAlgorithm;
 use rsa::PublicKey as _;
+
+const X509V3_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new("2.5.29.19");
 
 enum Match<'a> {
     /// Exact match using Authority Key Identifier
@@ -49,6 +53,10 @@ impl CertMgr {
 
         let mut current_child: MaybeOwned<X509Certificate> = MaybeOwned::from(certificate);
         loop {
+            if !Self::extensions_check(current_child.get()) {
+                return Err(Error::UnsupportedCriticalExtension);
+            }
+
             let is_selfsigned = self.verify_internal(trussed, None, current_child.get())?;
 
             if current_child.get().is_trusted() {
@@ -92,6 +100,11 @@ impl CertMgr {
                         self.iter_certificates(organization, trussed).collect();
 
                     for parent in potential_parents {
+                        if !Self::extensions_check(&parent) {
+                            warn!("Ignoring certificate with unsupported critical extensions");
+                            continue;
+                        }
+
                         match self.verify_internal(trussed, Some(&parent), current_child.get()) {
                             Ok(true) => {
                                 found_parent = Some(MaybeOwned::from(parent));
@@ -119,6 +132,68 @@ impl CertMgr {
         }
     }
 
+    /// Checks whether there are any unsupported critical extensions. Returns
+    /// true if certificate has passed verification.
+    fn extensions_check(cert: &X509Certificate) -> bool {
+        if let Some(extensions) = cert.extensions() {
+            for ext in extensions.iter().filter(|ext| ext.critical) {
+                match ext.extn_id {
+                    X509V3_CONSTRAINTS => (),
+                    _ => {
+                        error!("Unsupported critical extension OID {}", ext.extn_id);
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Checks whether certificate can be used for signing other certificates
+    /// (using X.509v3 Constraints extension).
+    fn ca_constaint_check(cert: &X509Certificate) -> bool {
+        if let Some(constraints) = cert
+            .extensions()
+            .map(|x| x.iter().find(|x| x.extn_id == X509V3_CONSTRAINTS))
+            .flatten()
+        {
+            match x509::BasicConstraints::from_der(constraints.extn_value) {
+                Ok(constraints) => {
+                    if constraints.ca {
+                        if constraints.path_len_constraint.is_some() {
+                            // From RFC5280 section 4.2.1.9:
+                            // The pathLenConstraint field is meaningful only if the cA boolean is
+                            // asserted and the key usage extension, if present, asserts the
+                            // keyCertSign bit (Section 4.2.1.3).  In this case, it gives the
+                            // maximum number of non-self-issued intermediate certificates that may
+                            // follow this certificate in a valid certification path.
+                            //
+                            // TODO: implement this
+                            error!("Path length constraint is not implemented");
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        // Constraints explicitly forbid using this certficate as cA
+                        false
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to parse X.509v3 constraints: {}", e);
+                    false
+                }
+            }
+        } else {
+            // There is no constraints extension prior to X.509v3, in that case
+            // certificate may be used for any purpose.
+            // In X.509v3 if constraints extension does not explicitly allow
+            // such usage if certificate then it is forbidden.
+            cert.version() < 3
+        }
+    }
+
     /// Verify parent-child relationship of supplied certificates. If parent is
     /// None then verify whether certificate is self-signed.
     fn verify_internal<T>(
@@ -132,12 +207,20 @@ impl CertMgr {
     {
         // TODO: verify whether child issuer matches with parent subject.
 
-        // TODO: verify whether parent can be used for signing (using X.509v3
-        // constraints)
-
         let parent_key = if let Some(parent) = parent {
+            if !Self::ca_constaint_check(parent) {
+                error!("Parent cannot be used for singing (X.509v3 constraints)");
+                return Ok(false);
+            }
+
             parent.key()?
         } else {
+            if !Self::ca_constaint_check(child) {
+                // If certificate constraints don't allow signing certificates,
+                // then certificate cannot sign itself.
+                return Ok(false);
+            }
+
             // Optimization: in case of self-signed certificate Authority Key ID
             // and Subject Key ID must be the same.
             if let Some(auth_key_id) = child.authority_key_id() {
