@@ -9,8 +9,6 @@ use rsa::PublicKey as _;
 const X509V3_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new("2.5.29.19");
 
 enum Match<'a> {
-    /// Exact match using Authority Key Identifier
-    Exact(&'a [u8]),
     /// Non exact match (by issuer). Need to iterate over all certificates from
     /// that issuer to find signing certificate.
     NonExact(&'a str),
@@ -84,7 +82,7 @@ impl CertMgr {
             }
 
             match Self::get_parent_id(current_child.get())? {
-                Match::Exact(_) => todo!(),
+                // Exact matches are currently not implemented, see comment in get_parent_id()
                 Match::NonExact(organization) => {
                     let mut found_parent = None;
 
@@ -279,10 +277,9 @@ impl CertMgr {
     fn get_parent_id<'r>(certificate: &'r X509Certificate) -> Result<Match<'r>> {
         let issuer = certificate.issuer()?;
 
-        if let Some(key_id) = certificate.authority_key_id() {
-            Ok(Match::Exact(key_id))
-        } else {
-            Ok(Match::NonExact(issuer.organization))
-        }
+        // TODO: implement certificate lookup using X.509v3 Authority Key Id
+        // This allows us to find parent certificate much quicker, as we don't
+        // have to iterate over all certificates of a respective issuer.
+        Ok(Match::NonExact(issuer.organization))
     }
 }
