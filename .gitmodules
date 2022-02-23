@@ -3,7 +3,7 @@
 	url = https://github.com/nrf-rs/nrf-hal
 [submodule "external/trussed"]
 	path = external/trussed
-	url = https://github.com/trussed-dev/trussed
+	url = https://github.com/fobnail/trussed
 [submodule "external/formats"]
 	path = external/formats
 	url = https://github.com/RustCrypto/formats
