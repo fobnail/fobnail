@@ -1,9 +1,17 @@
 use trussed::{
-    api::reply::{ReadDirFirst, ReadDirNext, ReadFile},
+    api::reply::{ReadAttribute, ReadDirFirst, ReadDirNext, ReadFile},
     types::{Location, PathBuf},
 };
 
 use super::{CertMgr, X509Certificate};
+
+/// Attribute for storing certificate flags. Currently only trusted flag is
+/// implemented (CERTIFICATE_FLAG_TRUSTED), all other bits are reserved for
+/// future use.
+const ATTRIBUTE_CERTIFICATE_FLAGS: u8 = 0;
+/// Controls whether certificate stored in DB is trusted. Should be set for root
+/// CAs.
+const CERTIFICATE_FLAG_TRUSTED: u8 = 1;
 
 impl CertMgr {
     /// Attempts to load DER-encoded X.509 certificate from file.
@@ -22,13 +30,28 @@ impl CertMgr {
                 let data = data.as_slice();
                 match X509Certificate::parse_owned(data.to_vec()) {
                     Ok(mut cert) => {
-                        // TODO: should fetch trusted flag filesystem
-                        // The original idea was to use LittleFS extended
-                        // attributes to store this flag
-                        // TODO: check once again whether Trussed supports
-                        // this (maybe there are some obscure APIs to do
-                        // that).
-                        cert.is_trusted = false;
+                        match trussed::try_syscall!(fs.read_attribute(
+                            Location::Internal,
+                            path_copy,
+                            ATTRIBUTE_CERTIFICATE_FLAGS,
+                        )) {
+                            Ok(ReadAttribute { data }) => match data {
+                                Some(attr) => {
+                                    if let Some(&flags) = attr.first() {
+                                        if flags & CERTIFICATE_FLAG_TRUSTED != 0 {
+                                            cert.is_trusted = true;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    // Assume defaults
+                                }
+                            },
+                            Err(_) => {
+                                warn!("Failed to read certificate flags");
+                            }
+                        }
+
                         Some(cert)
                     }
                     Err(e) => {
