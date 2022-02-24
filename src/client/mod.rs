@@ -1,10 +1,11 @@
 use core::cell::RefCell;
 
-use alloc::{rc::Rc, string::String};
+use alloc::{rc::Rc, string::String, vec::Vec};
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use rsa::PublicKey as _;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
+    api::reply::RandomBytes,
     config::MAX_SIGNATURE_LENGTH,
     types::{Location, Mechanism, Message, PathBuf},
 };
@@ -16,17 +17,19 @@ use crate::{
 };
 use state::State;
 
-use self::{crypto::RsaKey, proto::AikKey};
+use self::crypto::RsaKey;
 
 mod crypto;
 mod proto;
 mod state;
+mod tpm;
 
 /// Client which speaks to Fobnail server located on attester
 pub struct FobnailClient<'a> {
     state: Rc<RefCell<State<'a>>>,
     coap_client: CoapClient<'a>,
     trussed_platform: Rc<RefCell<trussed::ClientImplementation<pal::trussed::Syscall>>>,
+    certmgr: CertMgr,
 }
 
 impl<'a> FobnailClient<'a> {
@@ -38,6 +41,7 @@ impl<'a> FobnailClient<'a> {
             state: Rc::new(RefCell::new(State::default())),
             coap_client,
             trussed_platform: Rc::new(RefCell::new(trussed_platform)),
+            certmgr: CertMgr {},
         }
     }
 
@@ -101,24 +105,26 @@ impl<'a> FobnailClient<'a> {
             State::VerifyEkCertificate { data } => {
                 let mut trussed = self.trussed_platform.borrow_mut();
 
-                let certmgr = CertMgr;
-                let ok = match certmgr.load_cert(&data) {
-                    Ok(cert) => match Self::verify_ek_certificate(&certmgr, &cert, &mut *trussed) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            error!("Failed to verify EK certificate: {}", e);
-                            false
+                let cert = match self.certmgr.load_cert_owned(&data) {
+                    Ok(cert) => {
+                        match Self::verify_ek_certificate(&self.certmgr, &cert, &mut *trussed) {
+                            Ok(()) => Some(cert),
+                            Err(e) => {
+                                error!("Failed to verify EK certificate: {}", e);
+                                None
+                            }
                         }
-                    },
+                    }
                     Err(e) => {
                         error!("Failed to load EK certificate: {}", e);
-                        false
+                        None
                     }
                 };
 
-                if ok {
+                if let Some(cert) = cert {
                     *state = State::RequestAik {
                         request_pending: false,
+                        ek_cert: Some(cert),
                     };
                 } else {
                     *state = State::Idle {
@@ -128,6 +134,7 @@ impl<'a> FobnailClient<'a> {
             }
             State::RequestAik {
                 ref mut request_pending,
+                ..
             } => {
                 if !*request_pending {
                     *request_pending = true;
@@ -137,6 +144,44 @@ impl<'a> FobnailClient<'a> {
                     let state = Rc::clone(&self.state);
                     self.coap_client
                         .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::VerifyAikStage1 {
+                data,
+                ek_cert,
+                request_pending,
+            } => {
+                let mut trussed = self.trussed_platform.borrow_mut();
+
+                if !*request_pending {
+                    match Self::prepare_aik_challenge(&mut *trussed, &data, ek_cert) {
+                        Ok((id_object, encrypted_secret)) => {
+                            let encoded =
+                                trussed::cbor_serialize_bytes::<_, 512>(&proto::Challenge {
+                                    id_object: &id_object,
+                                    encrypted_secret: &encrypted_secret,
+                                })
+                                .unwrap();
+
+                            let mut request = coap_lite::CoapRequest::new();
+                            request.set_path("/challenge");
+                            request.set_method(RequestType::Post);
+                            request.message.payload = encoded.to_vec();
+                            // TODO: should set Content-Type header to CBOR
+
+                            let state = Rc::clone(&self.state);
+                            self.coap_client.queue_request(request, move |result| {
+                                Self::handle_response(result, state)
+                            });
+
+                            *request_pending = true;
+                        }
+                        Err(()) => {
+                            *state = State::Idle {
+                                timeout: Some(get_time_ms() as u64 + 5000),
+                            };
+                        }
+                    }
                 }
             }
             State::RequestMetadata {
@@ -233,7 +278,8 @@ impl<'a> FobnailClient<'a> {
             | State::Idle { .. }
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
-            | State::StoreMetadata { .. } => {
+            | State::StoreMetadata { .. }
+            | State::VerifyAikStage1 { .. } => {
                 unreachable!()
             }
         }
@@ -304,6 +350,12 @@ impl<'a> FobnailClient<'a> {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 }
             }
+            State::VerifyAikStage1 { .. } => {
+                error!("Failed to send challenge, retrying in 5s");
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                }
+            }
             State::RequestMetadata { .. } => {
                 error!("Failed to request metadata, retrying in 5s");
                 *state = State::Idle {
@@ -359,52 +411,22 @@ impl<'a> FobnailClient<'a> {
                     };
                 }
             }
-            State::RequestAik { .. } => {
+            State::RequestAik { ek_cert, .. } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
-                    let key = trussed::cbor_deserialize::<proto::AikKey>(&result.payload).unwrap();
-                    match key.key_type {
-                        proto::KeyType::Rsa => match key.key.n.len() * 8 {
-                            1024 | 2048 | 4096 | 8192 => match Self::verify_aik(&key) {
-                                Ok(()) => match RsaKey::load(&key.key.n, key.key.e) {
-                                    Ok(key) => {
-                                        *state = State::RequestMetadata {
-                                            request_pending: false,
-                                            aik_pubkey: Rc::new(crypto::Key::Rsa(key)),
-                                        }
-                                    }
-                                    Err(_) => {
-                                        *state = State::Idle {
-                                            timeout: Some(get_time_ms() as u64 + 5000),
-                                        };
-                                    }
-                                },
-                                Err(()) => {
-                                    error!("AIK verification failed");
-                                    *state = State::Idle {
-                                        timeout: Some(get_time_ms() as u64 + 5000),
-                                    };
-                                }
-                            },
-                            n => {
-                                error!("Unsupported RSA key size {}", n * 8);
-                                *state = State::Idle {
-                                    timeout: Some(get_time_ms() as u64 + 5000),
-                                };
-                            }
-                        },
-                        t => {
-                            error!("Unsupported key type {:?}", t);
-                            *state = State::Idle {
-                                timeout: Some(get_time_ms() as u64 + 5000),
-                            };
-                        }
-                    }
+                    *state = State::VerifyAikStage1 {
+                        data: result.payload,
+                        ek_cert: ek_cert.take().unwrap(),
+                        request_pending: false,
+                    };
                 } else {
                     error!("Server gave invalid response to AIK request");
                     *state = State::Idle {
                         timeout: Some(get_time_ms() as u64 + 5000),
                     };
                 }
+            }
+            State::VerifyAikStage1 { .. } => {
+                todo!("CHECKPOINT")
             }
             State::RequestMetadata { aik_pubkey, .. } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
@@ -616,8 +638,111 @@ impl<'a> FobnailClient<'a> {
         Ok(())
     }
 
-    fn verify_aik(aik: &AikKey) -> Result<(), ()> {
-        debug!("\n{:#04x?}\n", aik);
-        Ok(())
+    fn prepare_aik_challenge<T>(
+        trussed: &mut T,
+        data: &[u8],
+        ek_cert: &X509Certificate,
+    ) -> Result<(Vec<u8>, Vec<u8>), ()>
+    where
+        T: trussed::client::CryptoClient + trussed::client::Sha256 + trussed::client::Aes256Cbc,
+    {
+        //debug!("\n{:#04x?}\n", aik);
+
+        let key = trussed::cbor_deserialize::<proto::AikKey>(&data).map_err(|e| {
+            error!("AIK deserialize failed: {}", e);
+            ()
+        })?;
+        let RandomBytes { bytes: secret } = trussed::try_syscall!(trussed.random_bytes(32))
+            .map_err(|e| {
+                error!("Failed to generate secret: {:?}", e);
+                ()
+            })?;
+
+        match ek_cert.key().map_err(|e| {
+            error!("Failed to extract EK public key: {}", e);
+            ()
+        })? {
+            crate::certmgr::Key::Rsa { n, e } => {
+                let ek_key = RsaKey::load(n, e)?;
+                let loaded_key_name =
+                    tpm::mu::LoadedKeyName::decode(key.loaded_key_name).map_err(|()| {
+                        error!("Invalid LKN");
+                        ()
+                    })?;
+                let (id_object, encrypted_secret) = Self::make_credential_rsa(
+                    trussed,
+                    loaded_key_name,
+                    &ek_key,
+                    16,
+                    secret.as_slice(),
+                )
+                .unwrap();
+
+                Ok((id_object, encrypted_secret))
+
+                /*// Temporary helper to dump data in a format suitable for shell
+                struct HexFormatWithEscape<'a>(&'a [u8]);
+                impl core::fmt::Display for HexFormatWithEscape<'_> {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        for x in self.0 {
+                            write!(f, "\\x{:02x}", *x)?;
+                        }
+                        Ok(())
+                    }
+                }
+
+                info!("=== Credential dump ===");
+                info!("id_object: {}", HexFormatWithEscape(&id_object));
+                info!("secret: {}", HexFormatWithEscape(&encrypted_secret));*/
+            }
+        }
+
+        /*match key.key_type {
+            proto::KeyType::Rsa => match key.key.n.len() * 8 {
+                1024 | 2048 | 4096 | 8192 => {}
+                n => {
+                    error!("Unsupported RSA key size {}", n * 8);
+                    Err(())
+                }
+            },
+        }*/
+        /*match key.key_type {
+            proto::KeyType::Rsa => match key.key.n.len() * 8 {
+                1024 | 2048 | 4096 | 8192 => match Self::verify_aik(&key) {
+                    Ok(()) => match RsaKey::load(&key.key.n, key.key.e) {
+                        Ok(key) => {
+                            /**state = State::RequestMetadata {
+                                request_pending: false,
+                                aik_pubkey: Rc::new(crypto::Key::Rsa(key)),
+                            }*/
+                            todo!()
+                        }
+                        Err(_) => {
+                            *state = State::Idle {
+                                timeout: Some(get_time_ms() as u64 + 5000),
+                            };
+                        }
+                    },
+                    Err(()) => {
+                        error!("AIK verification failed");
+                        *state = State::Idle {
+                            timeout: Some(get_time_ms() as u64 + 5000),
+                        };
+                    }
+                },
+                n => {
+                    error!("Unsupported RSA key size {}", n * 8);
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
+                }
+            },
+            t => {
+                error!("Unsupported key type {:?}", t);
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                };
+            }
+        }*/
     }
 }

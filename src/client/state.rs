@@ -2,31 +2,41 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::certmgr::X509Certificate;
+
 use super::crypto::Key;
 use super::proto::Metadata;
 
 pub enum State<'a> {
     /// Repeat hello request until server responds.
-    Init {
-        request_pending: bool,
-    },
+    Init { request_pending: bool },
 
     /// State after receiving init data.
-    InitDataReceived {
-        data: Vec<u8>,
-    },
+    InitDataReceived { data: Vec<u8> },
 
     /// Send request to obtain EK certificate
-    RequestEkCert {
+    RequestEkCert { request_pending: bool },
+
+    /// Verify EK certificate chain
+    VerifyEkCertificate { data: Vec<u8> },
+
+    RequestAik {
+        // FIXME:
+        // This field is wrapped in option to allow moving inner value into next
+        // state. This is a hack we are using because Rust won't allow us to
+        // move object. Should work on improving state machine patterns so that
+        // we can update state atomically or get replace state machine with some
+        // other approach.
+        ek_cert: Option<X509Certificate<'static>>,
         request_pending: bool,
     },
 
-    /// Verify EK certificate chain
-    VerifyEkCertificate {
+    /// Do basic parsing and verification of received AIK. Prepare challenge
+    /// that attester has to pass (credential activation) to confirm that AIK
+    /// comes from TPM (AIK is bound to EK).
+    VerifyAikStage1 {
+        ek_cert: X509Certificate<'static>,
         data: Vec<u8>,
-    },
-
-    RequestAik {
         request_pending: bool,
     },
 
@@ -55,9 +65,7 @@ pub enum State<'a> {
     },
 
     /// Idle state with optional timeout. After timeout resets into Init state.
-    Idle {
-        timeout: Option<u64>,
-    },
+    Idle { timeout: Option<u64> },
 }
 
 impl Default for State<'_> {
@@ -75,7 +83,8 @@ impl fmt::Display for State<'_> {
             Self::InitDataReceived { .. } => write!(f, "init data received"),
             Self::RequestEkCert { .. } => write!(f, "request EK cert"),
             Self::VerifyEkCertificate { .. } => write!(f, "verify EK cert"),
-            Self::RequestAik { .. } => write!(f, "request aik"),
+            Self::RequestAik { .. } => write!(f, "request AIK"),
+            Self::VerifyAikStage1 { .. } => write!(f, "verify AIK (stage 1)"),
             Self::RequestMetadata { .. } => write!(f, "request metadata"),
             Self::VerifyMetadata { .. } => write!(f, "verify metadata"),
             Self::StoreMetadata { .. } => write!(f, "store metadata"),
