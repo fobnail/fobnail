@@ -280,6 +280,12 @@ impl CertMgr {
         // TODO: implement certificate lookup using X.509v3 Authority Key Id
         // This allows us to find parent certificate much quicker, as we don't
         // have to iterate over all certificates of a respective issuer.
-        Ok(Match::NonExact(issuer.organization))
+
+        if let Some(organization) = issuer.organization {
+            Ok(Match::NonExact(organization))
+        } else {
+            error!("Issuer has no organization field");
+            Err(Error::IssuerNotFound)
+        }
     }
 }

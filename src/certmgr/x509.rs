@@ -12,18 +12,26 @@ use x509::{
 /// Structure representing either or issuer or subject.
 #[derive(Debug)]
 pub struct IssuerSubject<'a> {
-    pub country: &'a str,
-    pub state: &'a str,
-    pub organization: &'a str,
+    pub country: Option<&'a str>,
+    pub state: Option<&'a str>,
+    pub organization: Option<&'a str>,
 }
 
 impl fmt::Display for IssuerSubject<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "C = {}, ST = {}, O = {}",
-            self.country, self.state, self.organization
-        )
+        if let Some(country) = self.country {
+            write!(f, "C = {}, ", country)?;
+        }
+
+        if let Some(state) = self.state {
+            write!(f, "ST = {}, ", state)?;
+        }
+
+        if let Some(organization) = self.organization {
+            write!(f, "O = {}", organization)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -259,23 +267,6 @@ fn parse_issuer_subject<'r>(name: &'r x501::name::Name) -> Result<IssuerSubject<
             }
         }
     }
-
-    macro_rules! u {
-        ($var:ident) => {
-            let $var = {
-                if let Some(v) = $var {
-                    v
-                } else {
-                    error!("Field {} is missing", stringify!($var));
-                    return Err(Error::CustomStatic("Required field is missing"));
-                }
-            };
-        };
-    }
-
-    u!(country);
-    u!(state);
-    u!(organization);
 
     Ok(IssuerSubject {
         country,
