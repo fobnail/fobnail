@@ -37,8 +37,21 @@ pub enum State<'a> {
     VerifyAikStage1 {
         ek_cert: X509Certificate<'static>,
         data: Vec<u8>,
-        request_pending: bool,
     },
+
+    /// Send AIK challenge. Attester decrypts secret which is part of challenge
+    /// and returns secret as plaintext. If decrypted secret matches with secret
+    /// stored in memory then verification succeeds.
+    VerifyAikStage2 {
+        request_pending: bool,
+        secret: trussed::types::Bytes<{ trussed::config::MAX_MESSAGE_LENGTH }>,
+        id_object: Vec<u8>,
+        encrypted_secret: Vec<u8>,
+        aik: Vec<u8>,
+    },
+
+    /// Parse and load AIK key.
+    LoadAik { raw_aik: Vec<u8> },
 
     // TODO: before requesting metadata we must request AIK (Attestation
     // Identity Key) key, receive it and verify.
@@ -85,6 +98,8 @@ impl fmt::Display for State<'_> {
             Self::VerifyEkCertificate { .. } => write!(f, "verify EK cert"),
             Self::RequestAik { .. } => write!(f, "request AIK"),
             Self::VerifyAikStage1 { .. } => write!(f, "verify AIK (stage 1)"),
+            Self::VerifyAikStage2 { .. } => write!(f, "verify AIK (stage 2)"),
+            Self::LoadAik { .. } => write!(f, "load AIK"),
             Self::RequestMetadata { .. } => write!(f, "request metadata"),
             Self::VerifyMetadata { .. } => write!(f, "verify metadata"),
             Self::StoreMetadata { .. } => write!(f, "store metadata"),
