@@ -146,44 +146,72 @@ impl<'a> FobnailClient<'a> {
                         .queue_request(request, move |result| Self::handle_response(result, state));
                 }
             }
-            State::VerifyAikStage1 {
-                data,
-                ek_cert,
-                request_pending,
-            } => {
+            State::VerifyAikStage1 { data, ek_cert } => {
                 let mut trussed = self.trussed_platform.borrow_mut();
 
-                if !*request_pending {
-                    match Self::prepare_aik_challenge(&mut *trussed, &data, ek_cert) {
-                        Ok((id_object, encrypted_secret)) => {
-                            let encoded =
-                                trussed::cbor_serialize_bytes::<_, 512>(&proto::Challenge {
-                                    id_object: &id_object,
-                                    encrypted_secret: &encrypted_secret,
-                                })
-                                .unwrap();
+                match Self::prepare_aik_challenge(&mut *trussed, &data, ek_cert) {
+                    Ok((secret, id_object, encrypted_secret)) => {
+                        // Trick to move data without copying.
+                        // Rust won't allow us just move out data because doing
+                        // so would make state invalid.
+                        let mut aik = vec![];
+                        core::mem::swap(data, &mut aik);
 
-                            let mut request = coap_lite::CoapRequest::new();
-                            request.set_path("/challenge");
-                            request.set_method(RequestType::Post);
-                            request.message.payload = encoded.to_vec();
-                            // TODO: should set Content-Type header to CBOR
-
-                            let state = Rc::clone(&self.state);
-                            self.coap_client.queue_request(request, move |result| {
-                                Self::handle_response(result, state)
-                            });
-
-                            *request_pending = true;
+                        *state = State::VerifyAikStage2 {
+                            request_pending: false,
+                            secret,
+                            id_object,
+                            encrypted_secret,
+                            aik,
                         }
-                        Err(()) => {
-                            *state = State::Idle {
-                                timeout: Some(get_time_ms() as u64 + 5000),
-                            };
-                        }
+                    }
+                    Err(()) => {
+                        *state = State::Idle {
+                            timeout: Some(get_time_ms() as u64 + 5000),
+                        };
                     }
                 }
             }
+            State::VerifyAikStage2 {
+                request_pending,
+                id_object,
+                encrypted_secret,
+                ..
+            } => {
+                if !*request_pending {
+                    let encoded = trussed::cbor_serialize_bytes::<_, 512>(&proto::Challenge {
+                        id_object: &id_object,
+                        encrypted_secret: &encrypted_secret,
+                    })
+                    .unwrap();
+
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/challenge");
+                    request.set_method(RequestType::Post);
+                    request.message.payload = encoded.to_vec();
+                    // TODO: should set Content-Type header to CBOR
+
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+
+                    *request_pending = true;
+                }
+            }
+            State::LoadAik { raw_aik } => match Self::load_aik(&raw_aik) {
+                Ok(aik) => {
+                    *state = State::RequestMetadata {
+                        aik_pubkey: aik,
+                        request_pending: false,
+                    };
+                }
+                Err(()) => {
+                    error!("Failed to load AIK");
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    }
+                }
+            },
             State::RequestMetadata {
                 request_pending, ..
             } => {
@@ -263,7 +291,8 @@ impl<'a> FobnailClient<'a> {
             State::Init { .. }
             | State::RequestMetadata { .. }
             | State::RequestAik { .. }
-            | State::RequestEkCert { .. } => {
+            | State::RequestEkCert { .. }
+            | State::VerifyAikStage2 { .. } => {
                 error!(
                     "Communication with attester failed (state {}): {:#?}, retrying after 1s",
                     state, error
@@ -279,7 +308,8 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
             | State::StoreMetadata { .. }
-            | State::VerifyAikStage1 { .. } => {
+            | State::VerifyAikStage1 { .. }
+            | State::LoadAik { .. } => {
                 unreachable!()
             }
         }
@@ -350,7 +380,7 @@ impl<'a> FobnailClient<'a> {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 }
             }
-            State::VerifyAikStage1 { .. } => {
+            State::VerifyAikStage2 { .. } => {
                 error!("Failed to send challenge, retrying in 5s");
                 *state = State::Idle {
                     timeout: Some(get_time_ms() as u64 + 5000),
@@ -368,7 +398,9 @@ impl<'a> FobnailClient<'a> {
             | State::Idle { .. }
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
-            | State::StoreMetadata { .. } => {
+            | State::StoreMetadata { .. }
+            | State::VerifyAikStage1 { .. }
+            | State::LoadAik { .. } => {
                 unreachable!()
             }
         }
@@ -416,7 +448,6 @@ impl<'a> FobnailClient<'a> {
                     *state = State::VerifyAikStage1 {
                         data: result.payload,
                         ek_cert: ek_cert.take().unwrap(),
-                        request_pending: false,
                     };
                 } else {
                     error!("Server gave invalid response to AIK request");
@@ -425,8 +456,27 @@ impl<'a> FobnailClient<'a> {
                     };
                 }
             }
-            State::VerifyAikStage1 { .. } => {
-                todo!("CHECKPOINT")
+            State::VerifyAikStage2 { secret, aik, .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Created) {
+                    if result.payload.as_slice() == secret.as_slice() {
+                        // Trick to move data without copying.
+                        // Rust won't allow us just move out data because doing
+                        // so would make state invalid.
+                        let mut raw_aik = vec![];
+                        core::mem::swap(aik, &mut raw_aik);
+                        *state = State::LoadAik { raw_aik };
+                    } else {
+                        error!("Attester has failed challenge");
+                        *state = State::Idle {
+                            timeout: Some(get_time_ms() as u64 + 5000),
+                        };
+                    }
+                } else {
+                    error!("Invalid response during AIK stage 1 verification");
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
+                }
             }
             State::RequestMetadata { aik_pubkey, .. } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
@@ -447,7 +497,9 @@ impl<'a> FobnailClient<'a> {
             | State::Idle { .. }
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
-            | State::StoreMetadata { .. } => {
+            | State::StoreMetadata { .. }
+            | State::VerifyAikStage1 { .. }
+            | State::LoadAik { .. } => {
                 unreachable!()
             }
         }
@@ -642,12 +694,17 @@ impl<'a> FobnailClient<'a> {
         trussed: &mut T,
         data: &[u8],
         ek_cert: &X509Certificate,
-    ) -> Result<(Vec<u8>, Vec<u8>), ()>
+    ) -> Result<
+        (
+            trussed::types::Bytes<{ trussed::config::MAX_MESSAGE_LENGTH }>,
+            Vec<u8>,
+            Vec<u8>,
+        ),
+        (),
+    >
     where
         T: trussed::client::CryptoClient + trussed::client::Sha256 + trussed::client::Aes256Cbc,
     {
-        //debug!("\n{:#04x?}\n", aik);
-
         let key = trussed::cbor_deserialize::<proto::AikKey>(&data).map_err(|e| {
             error!("AIK deserialize failed: {}", e);
             ()
@@ -678,71 +735,33 @@ impl<'a> FobnailClient<'a> {
                 )
                 .unwrap();
 
-                Ok((id_object, encrypted_secret))
-
-                /*// Temporary helper to dump data in a format suitable for shell
-                struct HexFormatWithEscape<'a>(&'a [u8]);
-                impl core::fmt::Display for HexFormatWithEscape<'_> {
-                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                        for x in self.0 {
-                            write!(f, "\\x{:02x}", *x)?;
-                        }
-                        Ok(())
-                    }
-                }
-
-                info!("=== Credential dump ===");
-                info!("id_object: {}", HexFormatWithEscape(&id_object));
-                info!("secret: {}", HexFormatWithEscape(&encrypted_secret));*/
+                Ok((secret, id_object, encrypted_secret))
             }
         }
+    }
 
-        /*match key.key_type {
+    fn load_aik(raw_aik: &[u8]) -> Result<Rc<crypto::Key<'static>>, ()> {
+        let key = trussed::cbor_deserialize::<proto::AikKey>(&raw_aik).map_err(|e| {
+            error!("AIK deserialize failed: {}", e);
+            ()
+        })?;
+
+        match key.key_type {
             proto::KeyType::Rsa => match key.key.n.len() * 8 {
-                1024 | 2048 | 4096 | 8192 => {}
+                1024 | 2048 | 4096 | 8192 => {
+                    let key = RsaKey::load(&key.key.n, key.key.e)?;
+                    Ok(Rc::new(crypto::Key::Rsa(key)))
+                }
+
                 n => {
                     error!("Unsupported RSA key size {}", n * 8);
                     Err(())
                 }
             },
-        }*/
-        /*match key.key_type {
-            proto::KeyType::Rsa => match key.key.n.len() * 8 {
-                1024 | 2048 | 4096 | 8192 => match Self::verify_aik(&key) {
-                    Ok(()) => match RsaKey::load(&key.key.n, key.key.e) {
-                        Ok(key) => {
-                            /**state = State::RequestMetadata {
-                                request_pending: false,
-                                aik_pubkey: Rc::new(crypto::Key::Rsa(key)),
-                            }*/
-                            todo!()
-                        }
-                        Err(_) => {
-                            *state = State::Idle {
-                                timeout: Some(get_time_ms() as u64 + 5000),
-                            };
-                        }
-                    },
-                    Err(()) => {
-                        error!("AIK verification failed");
-                        *state = State::Idle {
-                            timeout: Some(get_time_ms() as u64 + 5000),
-                        };
-                    }
-                },
-                n => {
-                    error!("Unsupported RSA key size {}", n * 8);
-                    *state = State::Idle {
-                        timeout: Some(get_time_ms() as u64 + 5000),
-                    };
-                }
-            },
             t => {
                 error!("Unsupported key type {:?}", t);
-                *state = State::Idle {
-                    timeout: Some(get_time_ms() as u64 + 5000),
-                };
+                Err(())
             }
-        }*/
+        }
     }
 }
