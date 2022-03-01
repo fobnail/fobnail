@@ -149,7 +149,15 @@ impl<'a> FobnailClient<'a> {
             State::VerifyAikStage1 { data, ek_cert } => {
                 let mut trussed = self.trussed_platform.borrow_mut();
 
-                match Self::prepare_aik_challenge(&mut *trussed, &data, ek_cert) {
+                match Self::decode_aik(&mut *trussed, &data).and_then(
+                    |(_tpm_public, loaded_key_name)| {
+                        Self::prepare_aik_challenge(
+                            &mut *trussed,
+                            tpm::mu::LoadedKeyName::decode(&loaded_key_name).unwrap(),
+                            ek_cert,
+                        )
+                    },
+                ) {
                     Ok((secret, id_object, encrypted_secret)) => {
                         // Trick to move data without copying.
                         // Rust won't allow us just move out data because doing
@@ -166,6 +174,7 @@ impl<'a> FobnailClient<'a> {
                         }
                     }
                     Err(()) => {
+                        error!("AIK verification failed");
                         *state = State::Idle {
                             timeout: Some(get_time_ms() as u64 + 5000),
                         };
@@ -692,7 +701,7 @@ impl<'a> FobnailClient<'a> {
 
     fn prepare_aik_challenge<T>(
         trussed: &mut T,
-        data: &[u8],
+        loaded_key_name: tpm::mu::LoadedKeyName,
         ek_cert: &X509Certificate,
     ) -> Result<
         (
@@ -705,10 +714,6 @@ impl<'a> FobnailClient<'a> {
     where
         T: trussed::client::CryptoClient + trussed::client::Sha256 + trussed::client::Aes256Cbc,
     {
-        let key = trussed::cbor_deserialize::<proto::AikKey>(&data).map_err(|e| {
-            error!("AIK deserialize failed: {}", e);
-            ()
-        })?;
         let RandomBytes { bytes: secret } = trussed::try_syscall!(trussed.random_bytes(32))
             .map_err(|e| {
                 error!("Failed to generate secret: {:?}", e);
@@ -721,11 +726,7 @@ impl<'a> FobnailClient<'a> {
         })? {
             crate::certmgr::Key::Rsa { n, e } => {
                 let ek_key = RsaKey::load(n, e)?;
-                let loaded_key_name =
-                    tpm::mu::LoadedKeyName::decode(key.loaded_key_name).map_err(|()| {
-                        error!("Invalid LKN");
-                        ()
-                    })?;
+
                 let (id_object, encrypted_secret) = Self::make_credential_rsa(
                     trussed,
                     loaded_key_name,
@@ -740,16 +741,75 @@ impl<'a> FobnailClient<'a> {
         }
     }
 
-    fn load_aik(raw_aik: &[u8]) -> Result<Rc<crypto::Key<'static>>, ()> {
-        let key = trussed::cbor_deserialize::<proto::AikKey>(&raw_aik).map_err(|e| {
-            error!("AIK deserialize failed: {}", e);
-            ()
-        })?;
+    /// Decode TPM2B_PUBLIC structure containing AIK key, AIK name, attributes.
+    /// Verify key attributes and compute key name.
+    fn decode_aik<'r, T>(
+        trussed: &mut T,
+        data: &'r [u8],
+    ) -> Result<(tpm::mu::Public<'r>, Vec<u8>), ()>
+    where
+        T: trussed::client::Sha256,
+    {
+        const TPMA_OBJECT_FIXEDTPM: u32 = 0x00000002;
+        const TPMA_OBJECT_FIXEDPARENT: u32 = 0x00000010;
+        const TPMA_OBJECT_SENSITIVEDATAORIGIN: u32 = 0x00000020;
+        const TPMA_OBJECT_USERWITHAUTH: u32 = 0x00000040;
+        const TPMA_OBJECT_NODA: u32 = 0x00000400;
+        const TPMA_OBJECT_DECRYPT: u32 = 0x00020000;
+        const TPMA_OBJECT_SIGN_ENCRYPT: u32 = 0x00040000;
 
-        match key.key_type {
-            proto::KeyType::Rsa => match key.key.n.len() * 8 {
+        const EXPECTED_AIK_ATTRIBUTES: u32 = TPMA_OBJECT_USERWITHAUTH
+            | TPMA_OBJECT_SIGN_ENCRYPT
+            | TPMA_OBJECT_DECRYPT
+            | TPMA_OBJECT_FIXEDTPM
+            | TPMA_OBJECT_FIXEDPARENT
+            | TPMA_OBJECT_SENSITIVEDATAORIGIN
+            | TPMA_OBJECT_NODA;
+
+        let public = tpm::mu::Public::decode(data)?;
+        if public.object_attributes != EXPECTED_AIK_ATTRIBUTES {
+            error!(
+                "Key attributes are not valid for AIK, expected {} got {}",
+                EXPECTED_AIK_ATTRIBUTES, public.object_attributes
+            );
+            return Err(());
+        }
+
+        let name = match public.hash_algorithm {
+            tpm::mu::Algorithm::Sha256 => {
+                // We hash all bytes except first two which are size of
+                // TPM2B_PUBLIC structure.
+
+                let trussed::api::reply::Hash { hash } =
+                    trussed::syscall!(trussed.hash_sha256(&public.raw_data[2..]));
+
+                // Prepend algorithm ID to turn hash into name.
+                let mut name = Vec::with_capacity(2 + hash.len());
+                name.extend_from_slice(&public.hash_algorithm.as_raw().to_be_bytes());
+                name.extend_from_slice(&hash);
+                name
+            }
+            _ => {
+                // TODO: to avoid matching hash algorithms in multiple places
+                // we should create a universal helper method/class which takes
+                // algorithm as parameter (instead of generics) and then calls
+                // proper APIs.
+                error!("Unsupported hash algorithm");
+                error!("Cannot compute LKN");
+                return Err(());
+            }
+        };
+
+        Ok((public, name))
+    }
+
+    fn load_aik(raw_aik: &[u8]) -> Result<Rc<crypto::Key<'static>>, ()> {
+        let key = tpm::mu::Public::decode(&raw_aik)?;
+
+        match key.key {
+            tpm::mu::PublicKey::Rsa { exponent, modulus } => match modulus.len() * 8 {
                 1024 | 2048 | 4096 | 8192 => {
-                    let key = RsaKey::load(&key.key.n, key.key.e)?;
+                    let key = RsaKey::load(&modulus, exponent)?;
                     Ok(Rc::new(crypto::Key::Rsa(key)))
                 }
 
@@ -758,10 +818,6 @@ impl<'a> FobnailClient<'a> {
                     Err(())
                 }
             },
-            t => {
-                error!("Unsupported key type {:?}", t);
-                Err(())
-            }
         }
     }
 }

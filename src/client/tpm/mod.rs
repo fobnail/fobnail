@@ -153,6 +153,13 @@ impl FobnailClient<'_> {
 
                 Ok((id_object, encrypted_secret_with_size))
             }
+            _ => {
+                error!(
+                    "Algorithm {:?} is unsupported or invalid",
+                    loaded_key_name.algorithm()
+                );
+                return Err(());
+            }
         }
     }
 }
