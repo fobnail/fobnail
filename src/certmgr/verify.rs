@@ -1,11 +1,13 @@
 use der::Decodable;
-use x509::ObjectIdentifier;
+use x509::{KeyUsage, KeyUsages, ObjectIdentifier};
 
 use super::{CertMgr, Error, Result, X509Certificate};
 use crate::certmgr::HashAlgorithm;
 use rsa::PublicKey as _;
 
 const X509V3_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new("2.5.29.19");
+const X509V3_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new("2.5.29.15");
+const X509V3_SUBJECT_ALTERNATIVE_NAME: ObjectIdentifier = ObjectIdentifier::new("2.5.29.17");
 
 enum Match<'a> {
     /// Non exact match (by issuer). Need to iterate over all certificates from
@@ -47,6 +49,11 @@ impl CertMgr {
         const RECURSION_LIMIT: usize = 50;
 
         let mut recursion_level = 0;
+
+        // Make sure EK certificate meets TCG requirements
+        if !Self::tcg_compliance_check(certificate) {
+            return Err(Error::DoesNotMeetTcgRequirements);
+        }
 
         let mut current_child: MaybeOwned<X509Certificate> = MaybeOwned::from(certificate);
         loop {
@@ -128,6 +135,61 @@ impl CertMgr {
         }
     }
 
+    /// Checks whether certificate meets requirements defined in
+    /// TCG EK Credential profile version 2.3 revision 2.
+    fn tcg_compliance_check(cert: &X509Certificate) -> bool {
+        if cert.version() != 3 {
+            error!("Expected X509v3 certificate but got v{}", cert.version());
+            return false;
+        }
+
+        // Subject Alternative Name extension must be present if subject is
+        // empty.
+        // TODO: DN parsing must be updated, currently unknown OIDs in DN are
+        // discarded, so we can get empty DN where it actually isn't.
+        //
+        // Currently we are not using alternative name so we just ignore it.
+        //
+        // Subject alternative name contains various interesting
+        // information like TPM manufacturer, TPM model, TPM version and other
+        // TODO: do we need anything from there?
+
+        // EK certficate must have Basic Constraints with CA set to FALSE
+
+        if Self::ca_constraint_check(cert) {
+            error!("EK certificate must have Basic Constraints with CA=FALSE");
+            return false;
+        }
+
+        if let Some(key_usage) = cert.extension(X509V3_KEY_USAGE) {
+            // According to TCG keyEncipherment bit must be set for RSA EK
+            // certificate. Currently we assume RSA.
+
+            match KeyUsage::from_der(key_usage.extn_value) {
+                Ok(key_usage) => {
+                    // TODO: probably should do something with other flags too.
+
+                    let have_key_encipherment = key_usage
+                        .into_iter()
+                        .any(|x| x == KeyUsages::KeyEncipherment);
+                    if !have_key_encipherment {
+                        error!("keyEncipherment is not set, but it is required");
+                        return false;
+                    }
+                }
+                Err(e) => {
+                    error!("Key usage extension data invalid: {}", e);
+                    return false;
+                }
+            }
+        } else {
+            error!("Mandatory Key Usage extension is missing");
+            return false;
+        }
+
+        true
+    }
+
     /// Checks whether there are any unsupported critical extensions. Returns
     /// true if certificate has passed verification.
     fn extensions_check(cert: &X509Certificate) -> bool {
@@ -135,6 +197,10 @@ impl CertMgr {
             for ext in extensions.iter().filter(|ext| ext.critical) {
                 match ext.extn_id {
                     X509V3_CONSTRAINTS => (),
+                    // Extension is verified in tcg_compliance_check.
+                    X509V3_KEY_USAGE => (),
+                    // We don't use this extension for any purpose.
+                    X509V3_SUBJECT_ALTERNATIVE_NAME => (),
                     _ => {
                         error!("Unsupported critical extension OID {}", ext.extn_id);
                         return false;
@@ -148,7 +214,7 @@ impl CertMgr {
 
     /// Checks whether certificate can be used for signing other certificates
     /// (using X.509v3 Constraints extension).
-    fn ca_constaint_check(cert: &X509Certificate) -> bool {
+    fn ca_constraint_check(cert: &X509Certificate) -> bool {
         if let Some(constraints) = cert
             .extensions()
             .map(|x| x.iter().find(|x| x.extn_id == X509V3_CONSTRAINTS))
@@ -204,14 +270,14 @@ impl CertMgr {
         // TODO: verify whether child issuer matches with parent subject.
 
         let parent_key = if let Some(parent) = parent {
-            if !Self::ca_constaint_check(parent) {
+            if !Self::ca_constraint_check(parent) {
                 error!("Parent cannot be used for singing (X.509v3 constraints)");
                 return Ok(false);
             }
 
             parent.key()?
         } else {
-            if !Self::ca_constaint_check(child) {
+            if !Self::ca_constraint_check(child) {
                 // If certificate constraints don't allow signing certificates,
                 // then certificate cannot sign itself.
                 return Ok(false);
