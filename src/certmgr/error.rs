@@ -15,6 +15,7 @@ pub enum Error {
     UntrustedSelfSignedCert,
     UnsupportedCriticalExtension,
     DoesNotMeetTcgRequirements,
+    ExceededPathLenConstraint,
 }
 
 impl From<x509::der::Error> for Error {
@@ -41,6 +42,9 @@ impl Display for Error {
             Self::UnsupportedCriticalExtension => write!(f, "unsupported critical extension"),
             Self::DoesNotMeetTcgRequirements => {
                 write!(f, "certificate does not meet TCG requirements")
+            }
+            Self::ExceededPathLenConstraint => {
+                write!(f, "exceeded path length constraint")
             }
         }
     }
