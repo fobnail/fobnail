@@ -12,7 +12,7 @@ use clap::Parser;
 use littlefs2::{
     consts::{U16, U512},
     fs::{Allocation, Attribute, FileType, Filesystem, ReadDirAllocation},
-    io::Result as LfsResult,
+    io::{Result as LfsResult, Read as _},
 };
 
 #[derive(Parser)]
@@ -37,6 +37,12 @@ enum Command {
     Del {
         path: PathBuf,
     },
+    #[clap(about = "Copy from image to host")]
+    CopyFrom {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+    #[clap(about = "Copy from host to image")]
     CopyTo {
         source: PathBuf,
         destination: PathBuf,
@@ -81,6 +87,11 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Del { path } => {
             del(&fs, &path)?;
+        }
+        Command::CopyFrom {
+            source,destination
+        } => {
+            copy_from(&fs, &source, &destination)?;
         }
         Command::CopyTo {
             source,
@@ -185,6 +196,23 @@ pub fn write_file(
         },
     )
     .unwrap();
+
+    Ok(())
+}
+
+fn copy_from(fs: &Filesystem<Flash>, source: &Path, destination: &Path) -> anyhow::Result<()> {
+    let mut dst = OpenOptions::new().write(true).create_new(true).open(destination)?;
+    let mut data = vec![];
+    fs.open_file_with_options_and_then(|opt|opt.read(true).write(false), &path_to_lfs_path(source), |s| {
+        let len = s.len()?;
+        data.resize(len, 0);
+        s.read_exact(&mut data[..])?;
+
+        Ok(())
+    }).unwrap();
+
+    dst.write_all(&data)?;
+    dst.flush()?;
 
     Ok(())
 }
