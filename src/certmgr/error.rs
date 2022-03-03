@@ -14,6 +14,7 @@ pub enum Error {
     IssuerNotFound,
     UntrustedSelfSignedCert,
     UnsupportedCriticalExtension,
+    DoesNotMeetTcgRequirements,
 }
 
 impl From<x509::der::Error> for Error {
@@ -38,6 +39,9 @@ impl Display for Error {
             Self::IssuerNotFound => write!(f, "no issuer certicate found"),
             Self::UntrustedSelfSignedCert => write!(f, "untrusted self-signed certificate"),
             Self::UnsupportedCriticalExtension => write!(f, "unsupported critical extension"),
+            Self::DoesNotMeetTcgRequirements => {
+                write!(f, "certificate does not meet TCG requirements")
+            }
         }
     }
 }
