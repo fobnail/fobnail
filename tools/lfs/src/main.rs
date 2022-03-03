@@ -12,7 +12,7 @@ use clap::Parser;
 use littlefs2::{
     consts::{U16, U512},
     fs::{Allocation, Attribute, FileType, Filesystem, ReadDirAllocation},
-    io::{Result as LfsResult, Read as _},
+    io::{Read as _, Result as LfsResult},
 };
 
 #[derive(Parser)]
@@ -61,6 +61,8 @@ enum Command {
         trusted: bool,
         #[clap(long)]
         reinstall: bool,
+        #[clap(long)]
+        der: bool,
         path: Vec<PathBuf>,
     },
 }
@@ -89,7 +91,8 @@ fn main() -> anyhow::Result<()> {
             del(&fs, &path)?;
         }
         Command::CopyFrom {
-            source,destination
+            source,
+            destination,
         } => {
             copy_from(&fs, &source, &destination)?;
         }
@@ -121,9 +124,10 @@ fn main() -> anyhow::Result<()> {
             path,
             trusted,
             reinstall,
+            der,
         } => {
             for path in &path {
-                if let Err(e) = cert::install(&fs, &path, trusted, reinstall) {
+                if let Err(e) = cert::install(&fs, &path, trusted, reinstall, der) {
                     println!("Failed to install {}: {}", path.display(), e);
                 }
             }
@@ -201,15 +205,23 @@ pub fn write_file(
 }
 
 fn copy_from(fs: &Filesystem<Flash>, source: &Path, destination: &Path) -> anyhow::Result<()> {
-    let mut dst = OpenOptions::new().write(true).create_new(true).open(destination)?;
+    let mut dst = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
     let mut data = vec![];
-    fs.open_file_with_options_and_then(|opt|opt.read(true).write(false), &path_to_lfs_path(source), |s| {
-        let len = s.len()?;
-        data.resize(len, 0);
-        s.read_exact(&mut data[..])?;
+    fs.open_file_with_options_and_then(
+        |opt| opt.read(true).write(false),
+        &path_to_lfs_path(source),
+        |s| {
+            let len = s.len()?;
+            data.resize(len, 0);
+            s.read_exact(&mut data[..])?;
 
-        Ok(())
-    }).unwrap();
+            Ok(())
+        },
+    )
+    .unwrap();
 
     dst.write_all(&data)?;
     dst.flush()?;

@@ -27,13 +27,31 @@ fn cert_from_pem(path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(pem.contents)
 }
 
+fn read_der(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(false)
+        .open(path)
+        .context("Failed to open certificate")?;
+
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+
+    Ok(data)
+}
+
 pub fn install(
     fs: &Filesystem<Flash>,
     path: &Path,
     trusted: bool,
     reinstall: bool,
+    der: bool,
 ) -> anyhow::Result<()> {
-    let cert_der = cert_from_pem(path)?;
+    let cert_der = if der {
+        read_der(path)?
+    } else {
+        cert_from_pem(path)?
+    };
     let (_, cert) = x509_parser::parse_x509_certificate(&cert_der)?;
 
     let organization = cert
