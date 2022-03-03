@@ -61,7 +61,8 @@ impl CertMgr {
                 return Err(Error::UnsupportedCriticalExtension);
             }
 
-            let is_selfsigned = self.verify_internal(trussed, None, current_child.get())?;
+            let is_selfsigned =
+                self.verify_internal(trussed, None, current_child.get(), recursion_level)?;
 
             if current_child.get().is_trusted() {
                 // We went up till root and found a trusted certificate. This
@@ -108,7 +109,12 @@ impl CertMgr {
                             continue;
                         }
 
-                        match self.verify_internal(trussed, Some(&parent), current_child.get()) {
+                        match self.verify_internal(
+                            trussed,
+                            Some(&parent),
+                            current_child.get(),
+                            recursion_level,
+                        ) {
                             Ok(true) => {
                                 found_parent = Some(MaybeOwned::from(parent));
                                 break;
@@ -156,7 +162,7 @@ impl CertMgr {
 
         // EK certficate must have Basic Constraints with CA set to FALSE
 
-        if Self::ca_constraint_check(cert) {
+        if Self::ca_constraint_check(cert).0 {
             error!("EK certificate must have Basic Constraints with CA=FALSE");
             return false;
         }
@@ -214,7 +220,7 @@ impl CertMgr {
 
     /// Checks whether certificate can be used for signing other certificates
     /// (using X.509v3 Constraints extension).
-    fn ca_constraint_check(cert: &X509Certificate) -> bool {
+    fn ca_constraint_check(cert: &X509Certificate) -> (bool, Option<u8>) {
         if let Some(constraints) = cert
             .extensions()
             .map(|x| x.iter().find(|x| x.extn_id == X509V3_CONSTRAINTS))
@@ -223,28 +229,25 @@ impl CertMgr {
             match x509::BasicConstraints::from_der(constraints.extn_value) {
                 Ok(constraints) => {
                     if constraints.ca {
-                        if constraints.path_len_constraint.is_some() {
+                        if let Some(path_len) = constraints.path_len_constraint {
                             // From RFC5280 section 4.2.1.9:
                             // The pathLenConstraint field is meaningful only if the cA boolean is
                             // asserted and the key usage extension, if present, asserts the
                             // keyCertSign bit (Section 4.2.1.3).  In this case, it gives the
                             // maximum number of non-self-issued intermediate certificates that may
                             // follow this certificate in a valid certification path.
-                            //
-                            // TODO: implement this
-                            error!("Path length constraint is not implemented");
-                            false
+                            (true, Some(path_len))
                         } else {
-                            true
+                            (true, None)
                         }
                     } else {
                         // Constraints explicitly forbid using this certficate as cA
-                        false
+                        (false, None)
                     }
                 }
                 Err(e) => {
                     error!("Failed to parse X.509v3 constraints: {}", e);
-                    false
+                    (false, None)
                 }
             }
         } else {
@@ -252,7 +255,7 @@ impl CertMgr {
             // certificate may be used for any purpose.
             // In X.509v3 if constraints extension does not explicitly allow
             // such usage if certificate then it is forbidden.
-            cert.version() < 3
+            (cert.version() < 3, None)
         }
     }
 
@@ -263,6 +266,7 @@ impl CertMgr {
         trussed: &mut T,
         parent: Option<&X509Certificate>,
         child: &X509Certificate,
+        depth: usize,
     ) -> Result<bool>
     where
         T: trussed::client::Sha256,
@@ -270,14 +274,21 @@ impl CertMgr {
         // TODO: verify whether child issuer matches with parent subject.
 
         let parent_key = if let Some(parent) = parent {
-            if !Self::ca_constraint_check(parent) {
+            let (ca, path_len_constraint) = Self::ca_constraint_check(parent);
+            if !ca {
                 error!("Parent cannot be used for singing (X.509v3 constraints)");
                 return Ok(false);
             }
 
+            if let Some(path_len_constraint) = path_len_constraint.map(usize::from) {
+                if depth > path_len_constraint {
+                    return Err(Error::ExceededPathLenConstraint);
+                }
+            }
+
             parent.key()?
         } else {
-            if !Self::ca_constraint_check(child) {
+            if !Self::ca_constraint_check(child).0 {
                 // If certificate constraints don't allow signing certificates,
                 // then certificate cannot sign itself.
                 return Ok(false);
