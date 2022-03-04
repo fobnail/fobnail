@@ -1,7 +1,7 @@
 use core::cell::RefCell;
 
 use alloc::{rc::Rc, string::String, vec::Vec};
-use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
+use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
 use rsa::PublicKey as _;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
@@ -198,7 +198,9 @@ impl<'a> FobnailClient<'a> {
                     request.set_path("/challenge");
                     request.set_method(RequestType::Post);
                     request.message.payload = encoded.to_vec();
-                    // TODO: should set Content-Type header to CBOR
+                    request
+                        .message
+                        .set_content_format(ContentFormat::ApplicationCBOR);
 
                     let state = Rc::clone(&self.state);
                     self.coap_client
