@@ -69,11 +69,7 @@ impl CertMgr {
     }
 
     /// Iterate over certificates issued by a specified organization.
-    pub fn iter_certificates<'r, T>(
-        &'r self,
-        organization: &'r str,
-        fs: &'r mut T,
-    ) -> CertificateIterator<'r, T> {
+    pub fn iter_certificates<'r>(&'r self, organization: &'r str) -> CertificateIterator<'r> {
         let valid_path = sanitize_path_component(organization);
         if !valid_path {
             warn!(
@@ -84,7 +80,6 @@ impl CertMgr {
 
         CertificateIterator {
             organization,
-            fs,
             done: !valid_path,
             first: true,
             certmgr: self,
@@ -92,19 +87,18 @@ impl CertMgr {
     }
 }
 
-pub struct CertificateIterator<'a, T> {
+pub struct CertificateIterator<'a> {
     organization: &'a str,
-    fs: &'a mut T,
     done: bool,
     first: bool,
     certmgr: &'a CertMgr,
 }
 
-impl<'a, T> CertificateIterator<'a, T>
-where
-    T: trussed::client::FilesystemClient,
-{
-    fn next(&mut self) -> Option<X509Certificate<'static>> {
+impl<'a> CertificateIterator<'a> {
+    fn next_internal<T>(&mut self, fs: &mut T) -> Option<X509Certificate<'static>>
+    where
+        T: trussed::client::FilesystemClient,
+    {
         loop {
             if self.first {
                 self.first = false;
@@ -113,11 +107,11 @@ where
                 let path = PathBuf::from(path_str.as_bytes());
 
                 let ReadDirFirst { entry } =
-                    trussed::try_syscall!(self.fs.read_dir_first(Location::Internal, path, None))
+                    trussed::try_syscall!(fs.read_dir_first(Location::Internal, path, None))
                         .ok()?;
                 if let Some(entry) = entry {
                     let path = PathBuf::from(entry.path());
-                    if let Some(cert) = self.certmgr.load_certificate_from_file(self.fs, path) {
+                    if let Some(cert) = self.certmgr.load_certificate_from_file(fs, path) {
                         return Some(cert);
                     }
                 } else {
@@ -126,10 +120,10 @@ where
                 }
             } else {
                 // Read next entry
-                let ReadDirNext { entry } = trussed::try_syscall!(self.fs.read_dir_next()).ok()?;
+                let ReadDirNext { entry } = trussed::try_syscall!(fs.read_dir_next()).ok()?;
                 if let Some(entry) = entry {
                     let path = PathBuf::from(entry.path());
-                    if let Some(cert) = self.certmgr.load_certificate_from_file(self.fs, path) {
+                    if let Some(cert) = self.certmgr.load_certificate_from_file(fs, path) {
                         return Some(cert);
                     }
                 } else {
@@ -138,19 +132,15 @@ where
             }
         }
     }
-}
 
-impl<'a, T> Iterator for CertificateIterator<'a, T>
-where
-    T: trussed::client::FilesystemClient,
-{
-    type Item = X509Certificate<'static>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    pub fn next<T>(&mut self, fs: &mut T) -> Option<X509Certificate<'static>>
+    where
+        T: trussed::client::FilesystemClient,
+    {
         if self.done {
             return None;
         }
-        let n = Self::next(self);
+        let n = Self::next_internal(self, fs);
         if n.is_none() {
             self.done = true;
         }
