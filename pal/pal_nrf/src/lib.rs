@@ -9,6 +9,7 @@ extern crate log;
 #[macro_use]
 extern crate rtt_target;
 
+extern crate alloc;
 pub extern crate cortex_m_rt;
 
 use core::mem::MaybeUninit;
@@ -27,6 +28,7 @@ mod led;
 mod logger;
 mod panic;
 pub mod timer;
+pub mod trussed;
 pub(crate) mod usb;
 
 static mut HFOSC: Option<Clocks<ExternalOscillator, Internal, LfOscStopped>> = None;
@@ -60,6 +62,10 @@ pub fn init() {
     let clocks = Clocks::new(periph.CLOCK);
     // Enable high frequency (64 MHz) clock, USB needs this
     unsafe { HFOSC = Some(clocks.enable_ext_hfosc()) };
+
+    let rng = periph.RNG;
+    let nvmc = periph.NVMC;
+    unsafe { trussed::drivers::init(rng, nvmc) };
 
     let port0 = gpio::p0::Parts::new(periph.P0);
 

@@ -61,7 +61,7 @@ if [ "${target}" == "pc" ]; then
     fi
 elif [ "${target}" == "nrf" ]; then
     cargo_target="thumbv7em-none-eabihf"
-    RUSTFLAGS="-C link-arg=-Tlink.x"
+    RUSTFLAGS="-C link-arg=-Tpal/pal_nrf/link.x -C linker-plugin-lto"
     if [ -n "${run}" ]; then
         cargo_command="embed"
     fi
@@ -91,6 +91,7 @@ docker run --privileged \
     -v /dev:/dev \
     -v $dir/.temp/cargo:/home/build/.cargo \
     -w /home/build/fobnail \
+    -e FOBNAIL_FLASH=target/flash.bin \
     -e FOBNAIL_LOG=$FOBNAIL_LOG \
     -e RUSTFLAGS="${RUSTFLAGS}" \
     --net=host \

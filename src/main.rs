@@ -63,6 +63,8 @@ fn make_udp_socket(max_packet: usize, port: u16) -> UdpSocket<'static> {
 #[cfg_attr(target_os = "none", pal::cortex_m_rt::entry)]
 fn main() -> ! {
     pal::init();
+    let mut trussed_clients = pal::trussed::init(&["fobnail_client"]);
+    let trussed_fobnail_client = trussed_clients.pop().unwrap();
 
     let mut neighbor_cache_storage: [Option<(IpAddress, Neighbor)>; 16] = [None; 16];
     let neighbor_cache = NeighborCache::new(&mut neighbor_cache_storage[..]);
@@ -90,7 +92,7 @@ fn main() -> ! {
     let coap_socket_handle = socket_set.add(coap_socket);
 
     let coap_client = CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT);
-    let mut fobnail_client = FobnailClient::new(coap_client);
+    let mut fobnail_client = FobnailClient::new(coap_client, trussed_fobnail_client);
 
     loop {
         match iface.poll(
