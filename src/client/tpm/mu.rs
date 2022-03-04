@@ -245,19 +245,15 @@ impl<'a> Public<'a> {
         // Decode TPMU_PUBLIC_PARMS, contents depend on algorithm type
         match algorithm {
             Algorithm::Rsa => {
-                // Decode TPMS_RSA_PARMS structure
-                // TODO: TPMT_SYM_DEF_OBJECT is absent from TPMS_RSA_PARMS when
-                // decoding AIK, however it may be present depending on flags.
-                // Need to inspect this.
-                // let symmetric_algorithm_id = decode!(cursor, data, u16);
-                // let symmetric_key_bits = decode!(cursor, data, u16);
-                // let symmetric_sym_mode = decode!(cursor, data, u16);
+                let symmetric_algorithm_id = Algorithm::try_from_u8(decode!(cursor, data, u16))?;
+                ensure!(
+                    symmetric_algorithm_id.is_null(),
+                    "Non-null symmetric algorithm, this is not supported"
+                );
 
                 let rsa_scheme = Algorithm::try_from_u8(decode!(cursor, data, u16))?;
-                let rsa_scheme_details = decode!(cursor, data, u16);
-                // TODO: do we need to support this?
                 ensure!(
-                    rsa_scheme.is_null() && rsa_scheme_details == 0x10,
+                    rsa_scheme.is_null(),
                     "Non-null scheme, this is not supported"
                 );
 
