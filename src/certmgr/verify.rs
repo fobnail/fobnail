@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use der::Decodable;
 use x509::ObjectIdentifier;
 
@@ -86,18 +85,17 @@ impl CertMgr {
                 Match::NonExact(organization) => {
                     let mut found_parent = None;
 
-                    // FIXME:
-                    // We cannot call self.verify_internal() while iterating because
-                    // both iter_certificate() and verify_internal() need exclusive
-                    // access to trussed.
-                    //
-                    // For now we load certificates into memory before checking them.
-                    // While this works when there is a small number of certificates
-                    // it will fill memory when there are more.
-                    let potential_parents: Vec<X509Certificate> =
-                        self.iter_certificates(organization, trussed).collect();
-
-                    for parent in potential_parents {
+                    // TODO: ideally we would use rust Iterator trait and for
+                    // syntax instead of while let. Currently we cannot do it
+                    // because then we would have to pass mutable trussed
+                    // reference to iter_certificates() preventing us from
+                    // calling verify_internal() inside for loop.
+                    // Trussed needs to gain some abilities: either it's APIs
+                    // must drop &mut self requirement or Trussed clients must
+                    // be cloneable. Since Trussed calls are synchronous this
+                    // should be possible.
+                    let mut cert_it = self.iter_certificates(organization);
+                    while let Some(parent) = cert_it.next(trussed) {
                         if !Self::extensions_check(&parent) {
                             warn!("Ignoring certificate with unsupported critical extensions");
                             continue;
