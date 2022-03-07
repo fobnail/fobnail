@@ -54,3 +54,7 @@ repos:
     rev: v1.4.1
     hooks:
       - id: typos
+
+# cargo is not supported for now in the pre-commit.ci
+ci:
+  skip: [fmt]
