@@ -280,8 +280,22 @@ impl<'a> FobnailClient<'a> {
                     debug!("/meta/{} already in DB", Self::format_hash(hash));
                 }
 
-                *state = State::Idle {
-                    timeout: Some(get_time_ms() as u64 + 5000),
+                *state = State::RequestRim {
+                    request_pending: false,
+                    metadata_hash: trussed::types::Bytes::from_slice(hash).unwrap(),
+                };
+            }
+            State::RequestRim {
+                request_pending, ..
+            } => {
+                if !*request_pending {
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/rim");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                    *request_pending = true;
                 }
             }
         }
@@ -303,7 +317,8 @@ impl<'a> FobnailClient<'a> {
             | State::RequestMetadata { .. }
             | State::RequestAik { .. }
             | State::RequestEkCert { .. }
-            | State::VerifyAikStage2 { .. } => {
+            | State::VerifyAikStage2 { .. }
+            | State::RequestRim { .. } => {
                 error!(
                     "Communication with attester failed (state {}): {:#?}, retrying after 1s",
                     state, error
@@ -403,6 +418,12 @@ impl<'a> FobnailClient<'a> {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 };
             }
+            State::RequestRim { .. } => {
+                error!("Failed to request RIM, retrying in 5s");
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                };
+            }
             // We don't send any requests during these states so we shouldn't
             // get responses.
             State::InitDataReceived { .. }
@@ -497,6 +518,18 @@ impl<'a> FobnailClient<'a> {
                     }
                 } else {
                     error!("Server gave invalid response to metadata request");
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
+                }
+            }
+            State::RequestRim { .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    }
+                } else {
+                    error!("Server gave invalid response to RIM request");
                     *state = State::Idle {
                         timeout: Some(get_time_ms() as u64 + 5000),
                     };
