@@ -61,7 +61,7 @@ if [ "${target}" == "pc" ]; then
     fi
 elif [ "${target}" == "nrf" ]; then
     cargo_target="thumbv7em-none-eabihf"
-    RUSTFLAGS="-C link-arg=-Tpal/pal_nrf/link.x -C linker-plugin-lto"
+    export RUSTFLAGS="-C link-arg=-Tpal/pal_nrf/link.x -C linker-plugin-lto"
     if [ -n "${run}" ]; then
         cargo_command="embed"
     fi
@@ -76,12 +76,12 @@ else
 fi
 
 if [ -n "${extra_args}" ]; then
-    cargo_extra_args="$@"
+    cargo_extra_args=$*
 fi
 
 full_cmd="cargo ${cargo_command} --target ${cargo_target} ${cargo_release_flag} ${cargo_extra_args}"
 
-dir=$(dirname $(readlink -f ${BASH_SOURCE[0]}))
+dir=$(dirname "$(readlink -f ${BASH_SOURCE[0]})")
 
 mkdir -p $dir/.temp/cargo
 

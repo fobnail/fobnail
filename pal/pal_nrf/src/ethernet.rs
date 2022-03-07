@@ -54,6 +54,6 @@ pub fn create_phy() -> Phy<'static, UsbDriver, Guard> {
 /// `EthernetInterfaceBuilder`
 pub fn get_ethernet_address() -> EthernetAddress {
     // FIXME: every device should have it's own unique address.
-    // Maybe we can derive it from some sort hardware adress stored in nRF chip?
+    // Maybe we can derive it from some sort hardware address stored in nRF chip?
     EthernetAddress([0x10, 0x20, 0x30, 0x40, 0x50, 0x60])
 }

@@ -55,7 +55,7 @@ impl fmt::Display for HashType {
 // cbor-smol won't implement this feature:
 // https://github.com/nickray/cbor-smol/blob/main/src/de.rs#L293
 //
-// The only reason we choosed cbor-smol over alternative solutions is that it
+// The only reason we chose cbor-smol over alternative solutions is that it
 // already is exported by Trussed and we don't want to pull many crates for the
 // same purpose.
 // TODO: maybe we can easily remove that dependency from Trussed and then use
