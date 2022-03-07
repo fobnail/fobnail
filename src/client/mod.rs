@@ -2,12 +2,10 @@ use core::cell::RefCell;
 
 use alloc::{rc::Rc, string::String, vec::Vec};
 use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
-use rsa::PublicKey as _;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
     api::reply::RandomBytes,
-    config::MAX_SIGNATURE_LENGTH,
-    types::{Location, Mechanism, Message, PathBuf},
+    types::{Location, Message, PathBuf},
 };
 
 use crate::{
@@ -21,6 +19,7 @@ use self::crypto::RsaKey;
 
 mod crypto;
 mod proto;
+mod signing;
 mod state;
 mod tpm;
 
@@ -245,10 +244,11 @@ impl<'a> FobnailClient<'a> {
                 match Self::do_verify_metadata_signature(&mut *trussed, metadata, aik_pubkey) {
                     Ok((metadata, hash)) => {
                         info!("Received attester metadata:");
-                        info!("  Version : {}", metadata.version);
-                        info!("  MAC     : {}", metadata.mac);
-                        info!("  Serial  : {}", metadata.sn);
-                        info!("  EK hash : {}", metadata.ek_hash.id);
+                        info!("  Version      : {}", metadata.version);
+                        info!("  MAC          : {}", metadata.mac);
+                        info!("  Manufacturer : {}", metadata.manufacturer);
+                        info!("  Product      : {}", metadata.product_name);
+                        info!("  Serial       : {}", metadata.serial_number);
                         // Changing state will trigger destructor of AIK key,
                         // removing it from Trussed keystore. Destructor calls
                         // a closure which borrows trussed client, so we need to
@@ -523,84 +523,9 @@ impl<'a> FobnailClient<'a> {
         key: &crypto::Key,
     ) -> Result<(proto::Metadata, trussed::Bytes<128>), ()>
     where
-        T: trussed::client::Ed255 + trussed::client::Sha256,
+        T: trussed::client::CryptoClient,
     {
-        let metadata_with_sig = trussed::cbor_deserialize::<proto::MetadataWithSignature>(metadata)
-            .map_err(|_| {
-                error!("Metadata deserialization failed");
-                ()
-            })?;
-
-        // We expect SHA256 for RSA and SHA512 for Ed25519
-        match key {
-            crypto::Key::Ed25519(key) => {
-                if metadata_with_sig.signature.len() > MAX_SIGNATURE_LENGTH {
-                    // If verify_ed255() is called with to big signature then Trussed
-                    // will panic, so we need to handle that case ourselves.
-                    error!("Signature size exceeds MAX_SIGNATURE_LENGTH");
-                    return Err(());
-                }
-
-                match trussed::try_syscall!(trussed.verify_ed255(
-                    key.key_id().clone(),
-                    metadata_with_sig.encoded_metadata,
-                    metadata_with_sig.signature,
-                )) {
-                    Ok(v) if v.valid => {
-                        let sha = trussed::try_syscall!(
-                            trussed.hash_sha256(metadata_with_sig.encoded_metadata)
-                        )
-                        .map_err(|e| {
-                            error!("Failed to compute SHA-256: {:?}", e);
-                        })?;
-
-                        let meta = trussed::cbor_deserialize::<proto::Metadata>(
-                            metadata_with_sig.encoded_metadata,
-                        )
-                        .map_err(|_| error!("Metadata deserialization failed"))?;
-                        Ok((meta, sha.hash))
-                    }
-                    Ok(_) => {
-                        error!("Metadata signature is invalid");
-                        Err(())
-                    }
-                    Err(e) => {
-                        error!("verify_ed255() failed: {:?}", e);
-                        Err(())
-                    }
-                }
-            }
-            crypto::Key::Rsa(key) => {
-                let sha = trussed::try_syscall!(trussed.hash(
-                    Mechanism::Sha256,
-                    trussed::Bytes::from_slice(metadata_with_sig.encoded_metadata).unwrap(),
-                ))
-                .map_err(|e| {
-                    error!("Failed to compute SHA-256: {:?}", e);
-                })?;
-                // Currently, Trussed does not provide RSA support so we use
-                // rsa crate directly.
-                match key.inner.verify(
-                    rsa::PaddingScheme::PKCS1v15Sign {
-                        hash: Some(rsa::Hash::SHA2_256),
-                    },
-                    &sha.hash,
-                    metadata_with_sig.signature,
-                ) {
-                    Ok(_) => {
-                        let meta = trussed::cbor_deserialize::<proto::Metadata>(
-                            metadata_with_sig.encoded_metadata,
-                        )
-                        .map_err(|_| error!("Metadata deserialization failed"))?;
-                        Ok((meta, sha.hash))
-                    }
-                    Err(e) => {
-                        error!("Metadata signature verification failed: {}", e);
-                        Err(())
-                    }
-                }
-            }
-        }
+        signing::decode_signed_object::<_, proto::Metadata>(trussed, metadata, key)
     }
 
     /// Verify correctness of the metadata itself.
@@ -614,20 +539,7 @@ impl<'a> FobnailClient<'a> {
             return false;
         }
 
-        let expected_hash_len = match metadata.ek_hash.id {
-            proto::HashType::SHA1 => 20,
-            proto::HashType::SHA256 => 32,
-            proto::HashType::SHA512 => 64,
-        };
-        if metadata.ek_hash.hash.len() != expected_hash_len {
-            error!(
-                "Invalid EK cert hash, expected hash with length of {} bytes (type {}) but got {}.",
-                expected_hash_len,
-                metadata.ek_hash.id,
-                metadata.ek_hash.hash.len()
-            );
-            return false;
-        }
+        // TODO: maybe should verify that strings aren't empty
 
         true
     }
