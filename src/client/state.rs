@@ -71,6 +71,22 @@ pub enum State<'a> {
         metadata: Metadata,
         /// Hash of metadata
         hash: trussed::Bytes<128>,
+        aik_pubkey: Rc<Key<'a>>,
+    },
+
+    /// Request Reference Integrity Manifests from attester.
+    RequestRim {
+        /// RIMs are bound to a specific device. We use metadata hashes to
+        /// distinguish these devices.
+        metadata_hash: trussed::Bytes<128>,
+        aik_pubkey: Rc<Key<'a>>,
+        request_pending: bool,
+    },
+
+    /// Verify Reference Integrity Manifest
+    VerifyRim {
+        rim: Vec<u8>,
+        aik_pubkey: Rc<Key<'a>>,
     },
 
     /// Idle state with optional timeout. After timeout resets into Init state.
@@ -99,6 +115,8 @@ impl fmt::Display for State<'_> {
             Self::RequestMetadata { .. } => write!(f, "request metadata"),
             Self::VerifyMetadata { .. } => write!(f, "verify metadata"),
             Self::StoreMetadata { .. } => write!(f, "store metadata"),
+            Self::RequestRim { .. } => write!(f, "request RIM"),
+            Self::VerifyRim { .. } => write!(f, "verify RIM"),
             Self::Idle { .. } => write!(f, "idle"),
         }
     }

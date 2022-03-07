@@ -256,7 +256,11 @@ impl<'a> FobnailClient<'a> {
                         drop(trussed);
 
                         if Self::do_verify_metadata(&metadata) {
-                            *state = State::StoreMetadata { metadata, hash }
+                            *state = State::StoreMetadata {
+                                metadata,
+                                hash,
+                                aik_pubkey: Rc::clone(aik_pubkey),
+                            }
                         } else {
                             *state = State::Idle {
                                 timeout: Some(get_time_ms() as u64 + 5000),
@@ -271,7 +275,9 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
-            State::StoreMetadata { hash, .. } => {
+            State::StoreMetadata {
+                hash, aik_pubkey, ..
+            } => {
                 let mut trussed = self.trussed_platform.borrow_mut();
                 let hash = hash.as_slice().try_into().expect("Invalid hash length");
                 if !Self::have_metadata_hash(&mut *trussed, hash) {
@@ -280,8 +286,39 @@ impl<'a> FobnailClient<'a> {
                     debug!("/meta/{} already in DB", Self::format_hash(hash));
                 }
 
-                *state = State::Idle {
-                    timeout: Some(get_time_ms() as u64 + 5000),
+                *state = State::RequestRim {
+                    request_pending: false,
+                    metadata_hash: trussed::types::Bytes::from_slice(hash).unwrap(),
+                    aik_pubkey: Rc::clone(aik_pubkey),
+                };
+            }
+            State::RequestRim {
+                request_pending, ..
+            } => {
+                if !*request_pending {
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/rim");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                    *request_pending = true;
+                }
+            }
+            State::VerifyRim { rim, aik_pubkey } => {
+                let mut trussed = self.trussed_platform.borrow_mut();
+                match Self::do_verify_rim(&mut *trussed, &rim, aik_pubkey) {
+                    Ok(()) => {
+                        *state = State::Idle {
+                            timeout: Some(get_time_ms() as u64 + 5000),
+                        }
+                    }
+                    Err(()) => {
+                        error!("RIM verification failed");
+                        *state = State::Idle {
+                            timeout: Some(get_time_ms() as u64 + 5000),
+                        }
+                    }
                 }
             }
         }
@@ -303,7 +340,8 @@ impl<'a> FobnailClient<'a> {
             | State::RequestMetadata { .. }
             | State::RequestAik { .. }
             | State::RequestEkCert { .. }
-            | State::VerifyAikStage2 { .. } => {
+            | State::VerifyAikStage2 { .. }
+            | State::RequestRim { .. } => {
                 error!(
                     "Communication with attester failed (state {}): {:#?}, retrying after 1s",
                     state, error
@@ -320,7 +358,8 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyMetadata { .. }
             | State::StoreMetadata { .. }
             | State::VerifyAikStage1 { .. }
-            | State::LoadAik { .. } => {
+            | State::LoadAik { .. }
+            | State::VerifyRim { .. } => {
                 unreachable!()
             }
         }
@@ -403,6 +442,12 @@ impl<'a> FobnailClient<'a> {
                     timeout: Some(get_time_ms() as u64 + 5000),
                 };
             }
+            State::RequestRim { .. } => {
+                error!("Failed to request RIM, retrying in 5s");
+                *state = State::Idle {
+                    timeout: Some(get_time_ms() as u64 + 5000),
+                };
+            }
             // We don't send any requests during these states so we shouldn't
             // get responses.
             State::InitDataReceived { .. }
@@ -411,7 +456,8 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyMetadata { .. }
             | State::StoreMetadata { .. }
             | State::VerifyAikStage1 { .. }
-            | State::LoadAik { .. } => {
+            | State::LoadAik { .. }
+            | State::VerifyRim { .. } => {
                 unreachable!()
             }
         }
@@ -502,6 +548,19 @@ impl<'a> FobnailClient<'a> {
                     };
                 }
             }
+            State::RequestRim { aik_pubkey, .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::VerifyRim {
+                        rim: result.payload,
+                        aik_pubkey: Rc::clone(aik_pubkey),
+                    }
+                } else {
+                    error!("Server gave invalid response to RIM request");
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
+                }
+            }
             // We don't send any requests during these states so we shouldn't
             // get responses.
             State::InitDataReceived { .. }
@@ -510,7 +569,8 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyMetadata { .. }
             | State::StoreMetadata { .. }
             | State::VerifyAikStage1 { .. }
-            | State::LoadAik { .. } => {
+            | State::LoadAik { .. }
+            | State::VerifyRim { .. } => {
                 unreachable!()
             }
         }
@@ -733,5 +793,66 @@ impl<'a> FobnailClient<'a> {
                 }
             },
         }
+    }
+
+    fn do_verify_rim<T>(trussed: &mut T, rim: &[u8], aik: &Rc<crypto::Key>) -> Result<(), ()>
+    where
+        T: trussed::client::CryptoClient,
+    {
+        let (rim, _) = signing::decode_signed_object::<_, proto::Rim>(trussed, rim, &aik)?;
+
+        Self::do_verify_pcrs(&rim.sha1, 20)?;
+        Self::do_verify_pcrs(&rim.sha256, 32)?;
+        Self::do_verify_pcrs(&rim.sha384, 48)?;
+
+        if rim.sha1.pcrs != 0 {
+            info!("sha1:");
+            for pcr in rim.sha1.pcr {
+                info!("  {}", Self::format_hash(pcr));
+            }
+        }
+
+        if rim.sha256.pcrs != 0 {
+            info!("sha256:");
+            for pcr in rim.sha256.pcr {
+                info!("  {}", Self::format_hash(pcr));
+            }
+        }
+
+        if rim.sha384.pcrs != 0 {
+            info!("sha384:");
+            for pcr in rim.sha384.pcr {
+                info!("  {}", Self::format_hash(pcr));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn do_verify_pcrs(pcrs: &proto::Pcrs, expected_pcr_len: usize) -> Result<(), ()> {
+        // pcrs is a bitmask representing which PCRs are present and which are
+        // not.
+        let n1 = pcrs.pcrs.count_ones() as usize;
+        let n2 = pcrs.pcr.len();
+        if n1 != n2 {
+            error!(
+                "PCR count does not match, count from mask is {}, but really there are {} PCRs",
+                n1, n2
+            );
+            return Err(());
+        }
+
+        for pcr in pcrs.pcr.iter() {
+            if pcr.len() != expected_pcr_len {
+                error!(
+                    "Invalid PCR size {}, expected {}",
+                    pcr.len(),
+                    expected_pcr_len
+                );
+                return Err(());
+            }
+        }
+
+        Ok(())
     }
 }

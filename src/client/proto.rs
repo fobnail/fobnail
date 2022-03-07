@@ -1,5 +1,5 @@
 use alloc::{string::String, vec::Vec};
-use core::fmt;
+use core::{fmt, marker::PhantomData};
 use serde::{Deserialize, Serialize};
 
 pub const CURRENT_VERSION: u8 = 1;
@@ -83,7 +83,7 @@ impl fmt::Display for HashType {
 // cbor-smol won't implement this feature:
 // https://github.com/nickray/cbor-smol/blob/main/src/de.rs#L293
 //
-// The only reason we choosed cbor-smol over alternative solutions is that it
+// The only reason we choose cbor-smol over alternative solutions is that it
 // already is exported by Trussed and we don't want to pull many crates for the
 // same purpose.
 // TODO: maybe we can easily remove that dependency from Trussed and then use
@@ -125,4 +125,91 @@ pub struct Challenge<'a> {
     pub id_object: &'a [u8],
     #[serde(rename = "encSecret", with = "serde_bytes")]
     pub encrypted_secret: &'a [u8],
+}
+
+/// Helper class to deserialize an array of byte strings.
+#[derive(Debug, Default)]
+pub struct ArrayOf<'a, T> {
+    pub inner: Vec<T>,
+    phantom: PhantomData<&'a ()>,
+}
+
+impl<T> ArrayOf<'_, T> {
+    #[inline]
+    pub fn iter(&self) -> core::slice::Iter<'_, T> {
+        self.inner.iter()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<T> IntoIterator for ArrayOf<'_, T> {
+    type Item = T;
+    type IntoIter = <Vec<T> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Vec::<T>::into_iter(self.inner)
+    }
+}
+
+impl<'a, 'de: 'a, T> serde::Deserialize<'de> for ArrayOf<'a, T>
+where
+    T: serde::Deserialize<'de> + 'a,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Visitor<'a, T> {
+            phantom: PhantomData<&'a T>,
+        }
+        impl<'a, 'de, T> serde::de::Visitor<'de> for Visitor<'a, T>
+        where
+            T: serde::Deserialize<'de>,
+        {
+            type Value = ArrayOf<'a, T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an array of objects")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut elements = vec![];
+                while let Some(x) = seq.next_element::<T>()? {
+                    elements.push(x);
+                }
+                Ok(ArrayOf {
+                    inner: elements,
+                    phantom: PhantomData,
+                })
+            }
+        }
+        deserializer.deserialize_seq(Visitor::<T> {
+            phantom: PhantomData,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct Pcrs<'a> {
+    pub pcrs: u32,
+    #[serde(borrow)]
+    pub pcr: ArrayOf<'a, &'a serde_bytes::Bytes>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Rim<'a> {
+    pub update_ctr: u32,
+    #[serde(borrow, default)]
+    pub sha1: Pcrs<'a>,
+    #[serde(borrow, default)]
+    pub sha256: Pcrs<'a>,
+    #[serde(borrow, default)]
+    pub sha384: Pcrs<'a>,
 }
