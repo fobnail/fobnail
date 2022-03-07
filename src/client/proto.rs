@@ -1,10 +1,9 @@
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 
 pub const CURRENT_VERSION: u8 = 1;
 
-#[derive(Deserialize)]
 pub struct MacAddress(pub [u8; 6]);
 
 impl fmt::Display for MacAddress {
@@ -13,6 +12,35 @@ impl fmt::Display for MacAddress {
             write!(f, "{}{:02X}", if i > 0 { ":" } else { "" }, x)?;
         }
         Ok(())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for MacAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        struct MacVisitor;
+        impl<'de> serde::de::Visitor<'de> for MacVisitor {
+            type Value = MacAddress;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a MAC address")
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v.len() != 6 {
+                    Err(serde::de::Error::invalid_length(v.len(), &"6"))
+                } else {
+                    Ok(MacAddress(v.try_into().unwrap()))
+                }
+            }
+        }
+
+        deserializer.deserialize_bytes(MacVisitor)
     }
 }
 
@@ -70,14 +98,16 @@ pub struct Hash {
 pub struct Metadata {
     pub version: u8,
     pub mac: MacAddress,
-    pub sn: Serial,
-    #[serde(rename = "EK_hash")]
-    pub ek_hash: Hash,
+    pub manufacturer: String,
+    pub product_name: String,
+    pub serial_number: String,
 }
 
 #[derive(Deserialize)]
-pub struct MetadataWithSignature<'a> {
-    pub encoded_metadata: &'a [u8],
+pub struct SignedObject<'a> {
+    /// Contains CBOR-encoded object.
+    pub data: &'a [u8],
+    /// Contains `data` signature.
     pub signature: &'a [u8],
 }
 
