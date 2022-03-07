@@ -1,0 +1,34 @@
+name: Build Fobnail binaries
+
+on:
+  push:
+
+env:
+  FOBNAIL_SDK_VERSION: v0.2.3
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Checkout all submodules
+        run: |
+          git submodule update --init --recursive --checkout
+
+      - name: Download run-fobnail-sdk script
+        run: |
+          wget https://raw.githubusercontent.com/fobnail/fobnail-sdk/${FOBNAIL_SDK_VERSION}/run-fobnail-sdk.sh
+          chmod +x ./run-fobnail-sdk.sh
+
+      - name: Build for PC target
+        run: |
+          export PATH=$PWD:$PATH
+          ./build.sh --target pc
+
+      - name: Build for nRF52 target
+        run: |
+          export PATH=$PWD:$PATH
+          ./build.sh --target nrf
