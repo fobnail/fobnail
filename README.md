@@ -8,8 +8,6 @@ TBD
 
 ### pre-commit hooks
 
-* Install [shellcheck](https://github.com/koalaman/shellcheck)
-
 * Install [rustfmt](https://github.com/rust-lang/rustfmt) and
   [rust-clippy](https://github.com/rust-lang/rust-clippy)
 
