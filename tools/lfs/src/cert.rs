@@ -6,7 +6,7 @@ use sha2::Digest;
 
 use crate::Flash;
 
-const CERT_ROOT_DIR: &'static str = "/fobnail_client/dat/cert";
+const CERT_ROOT_DIR: &'static str = "/trussed/dat/cert";
 // These constants must match with definitions in certmgr/store.rs
 const ATTRIBUTE_CERTIFICATE_FLAGS: u8 = 0;
 const CERTIFICATE_FLAG_TRUSTED: u8 = 1;
