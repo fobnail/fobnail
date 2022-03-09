@@ -19,6 +19,27 @@ coap-lite = { version = "0.7", default-features = false }
 # Must be kept in sync with pal_nrf and pal_pc
 trussed = { path = "external/trussed" }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
+rsa = { version = "0.5", default-features = false, features = ["alloc"] }
+x509 = { path = "external/formats/x509" }
+x501 = { path = "external/formats/x501" }
+der = { path = "external/formats/der" }
+
+# TODO: remove these dependencies after RSA gets moved to Trussed.
+rand_core = { version = "0.6", default-features = false }
+# TODO: Another dependency that should be removed. Trussed implements SHA256 but
+# due to its API limitations we cannot use it with RSA OAEP - Trussed expects a
+# continuous buffer, but rsa crate requires update().
+sha2 = { version = "0.9", default-features = false }
+# TODO: Move to Trussed
+# Use version 0.11 instead of latest (0.12) - until rsa v0.6 comes out we need
+# to use old hmac version, otherwise we run into complex build failures because
+# of between two different versions of digest crate which is dependency of these
+# two
+hmac = { version = "0.11", default-features = false }
+# Trussed supports only AES 256 CBC but we need CFB
+cfb-mode = { version = "0.8", default-features = false }
+aes = "0.8"
 
 [profile.dev]
 lto = "thin"

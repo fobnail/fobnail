@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use core::fmt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const CURRENT_VERSION: u8 = 1;
 
@@ -79,4 +79,20 @@ pub struct Metadata {
 pub struct MetadataWithSignature<'a> {
     pub encoded_metadata: &'a [u8],
     pub signature: &'a [u8],
+}
+
+#[derive(Debug, Serialize)]
+pub struct Challenge<'a> {
+    // Due to https://github.com/serde-rs/serde/issues/518 we need to use
+    // serde_bytes crate so that cbor-smol serializes data as sequence of bytes
+    // and not sequence of objects - when serialized a sequence of objects each
+    // byte in array is preceded by a major number, doubling size of serialized
+    // data.
+    //
+    // See also serde_bytes README
+    // https://github.com/serde-rs/bytes/blob/master/README.md
+    #[serde(rename = "idObject", with = "serde_bytes")]
+    pub id_object: &'a [u8],
+    #[serde(rename = "encSecret", with = "serde_bytes")]
+    pub encrypted_secret: &'a [u8],
 }
