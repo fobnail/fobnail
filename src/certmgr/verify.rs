@@ -160,7 +160,7 @@ impl CertMgr {
         // information like TPM manufacturer, TPM model, TPM version and other
         // TODO: do we need anything from there?
 
-        // EK certficate must have Basic Constraints with CA set to FALSE
+        // EK certificate must have Basic Constraints with CA set to FALSE
 
         if Self::ca_constraint_check(cert).0 {
             error!("EK certificate must have Basic Constraints with CA=FALSE");
@@ -241,7 +241,7 @@ impl CertMgr {
                             (true, None)
                         }
                     } else {
-                        // Constraints explicitly forbid using this certficate as cA
+                        // Constraints explicitly forbid using this certificate as cA
                         (false, None)
                     }
                 }
