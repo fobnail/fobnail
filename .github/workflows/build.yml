@@ -4,7 +4,7 @@ on:
   push:
 
 env:
-  FOBNAIL_SDK_VERSION: v0.2.3
+  FOBNAIL_SDK_VERSION: v0.2.4
 
 jobs:
   build:
@@ -12,11 +12,9 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
-
-      - name: Checkout all submodules
-        run: |
-          git submodule update --init --recursive --checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
 
       - name: Download run-fobnail-sdk script
         run: |
