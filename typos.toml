@@ -1,6 +1,3 @@
 [default.extend-words]
 # Don't correct the "PARMS" in name
 PARMS = "PARMS"
-
-[files]
-extend-exclude = ["Cargo.lock"]
