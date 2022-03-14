@@ -46,5 +46,5 @@ lto = "thin"
 opt-level = "z"
 
 [profile.dev.package]
-# FIXME: Littlefs requires strcpy() when optimizations are one.
+# FIXME: Littlefs requires strcpy() when optimizations are enabled.
 littlefs2-sys = { opt-level = 0 }
