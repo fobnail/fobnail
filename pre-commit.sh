@@ -34,9 +34,18 @@ root_dir=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # disable this warning.
 # shellcheck disable=SC2120
 precommit_run() {
+    # Shellcheck needs Docker access
+    docker_socket="/var/run/docker.sock"
+    if [ ! -e "${docker_socket}" ]; then
+        echo "${docker_socket} does not exist"
+        exit 1
+    fi
+
     # pre-commit will fail if Docker is called with -it flag set.
     export CI=true
-    export FOBNAIL_SDK_DOCKER_EXTRA_OPTS="-e PRE_COMMIT_COLOR=always -v $root_dir/.temp/pre-commit:/home/builder/.cache/pre-commit"
+    FOBNAIL_SDK_DOCKER_EXTRA_OPTS="-e PRE_COMMIT_COLOR=always -v $root_dir/.temp/pre-commit:/home/builder/.cache/pre-commit"
+    FOBNAIL_SDK_DOCKER_EXTRA_OPTS+=" -v ${docker_socket}:/var/run/docker.sock"
+    export FOBNAIL_SDK_DOCKER_EXTRA_OPTS
     (
         cd "${root_dir}"
         exec run-fobnail-sdk.sh pre-commit "$@"

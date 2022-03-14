@@ -4,7 +4,7 @@ on:
   push:
 
 env:
-  FOBNAIL_SDK_VERSION: v0.2.4
+  FOBNAIL_SDK_VERSION: v0.2.5
 
 jobs:
   build:
