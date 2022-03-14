@@ -8,15 +8,12 @@ TBD
 
 ### pre-commit hooks
 
-* Install [rustfmt](https://github.com/rust-lang/rustfmt) and
-  [rust-clippy](https://github.com/rust-lang/rust-clippy)
+* Make sure you have Fobnail SDK v0.2.5 or later.
 
-* [Install pre-commit](https://pre-commit.com/index.html#install)
-
-* Install hooks into repo:
+* Install hooks using `pre-commit.sh` script.
 
 ```
-pre-commit install
+./pre-commit.sh install
 ```
 
 * Enjoy automatic checks on each `git commit` action!
@@ -25,5 +22,5 @@ pre-commit install
   configuring existing ones):
 
 ```bash
-pre-commit run --all-files
+./pre-commit.sh run --all-files
 ```
