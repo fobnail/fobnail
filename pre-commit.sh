@@ -13,8 +13,17 @@ ARGS=(hook-impl --config=.pre-commit-config.yaml --hook-type=pre-commit)
 
 ARGS+=(--color always --hook-dir "/build" -- "\$@")
 
+# Shellcheck needs Docker access
+docker_socket="/var/run/docker.sock"
+if [ ! -e "\${docker_socket}" ]; then
+    echo "\${docker_socket} does not exist"
+    exit 1
+fi
+
 # git always calls us from repo root directory
-export FOBNAIL_SDK_DOCKER_EXTRA_OPTS="-v \$PWD/.temp/pre-commit:/home/builder/.cache/pre-commit"
+FOBNAIL_SDK_DOCKER_EXTRA_OPTS="-v \$PWD/.temp/pre-commit:/home/builder/.cache/pre-commit"
+FOBNAIL_SDK_DOCKER_EXTRA_OPTS+=" -v \${docker_socket}:/var/run/docker.sock"
+export FOBNAIL_SDK_DOCKER_EXTRA_OPTS
 
 if [ ! -d ".temp/pre-commit" ]; then
     mkdir -p .temp/pre-commit
@@ -34,6 +43,10 @@ root_dir=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # disable this warning.
 # shellcheck disable=SC2120
 precommit_run() {
+    if [ ! -d "${root_dir}/.temp/pre-commit" ]; then
+        mkdir -p "${root_dir}/.temp/pre-commit"
+    fi
+
     # Shellcheck needs Docker access
     docker_socket="/var/run/docker.sock"
     if [ ! -e "${docker_socket}" ]; then
