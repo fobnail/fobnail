@@ -76,15 +76,19 @@ else
 fi
 
 if [ -n "${extra_args}" ]; then
-    cargo_extra_args="$@"
+    cargo_extra_args="$*"
 fi
 
 full_cmd="cargo ${cargo_command} --target ${cargo_target} ${cargo_release_flag} ${cargo_extra_args}"
 
-dir=$(dirname $(readlink -f ${BASH_SOURCE[0]}))
+dir=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 
-mkdir -p $dir/.temp/cargo
+mkdir -p "${dir}/.temp/cargo"
 
-export FOBNAIL_SDK_DOCKER_EXTRA_OPTS="-v $dir/.temp/cargo:/home/builder/.cargo"
+FOBNAIL_SDK_DOCKER_EXTRA_OPTS="-v $dir/.temp/cargo:/home/builder/.cargo"
+FOBNAIL_SDK_DOCKER_EXTRA_OPTS+=" -e FOBNAIL_FLASH=target/flash.bin"
+export FOBNAIL_SDK_DOCKER_EXTRA_OPTS
+export RUSTFLAGS
 
+# shellcheck disable=SC2086
 run-fobnail-sdk.sh ${full_cmd}
