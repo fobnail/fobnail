@@ -20,6 +20,10 @@ struct Options {
     #[clap(short, long)]
     file: PathBuf,
 
+    /// Format flash before command (requires valid command)
+    #[clap(long)]
+    format: bool,
+
     #[clap(subcommand)]
     command: Command,
 }
@@ -78,6 +82,11 @@ fn main() -> anyhow::Result<()> {
             .context("Failed to open flash")?,
     );
     let mut alloc = Allocation::new();
+
+    if options.format {
+        Filesystem::format(&mut flash).unwrap();
+    }
+
     let fs = Filesystem::mount(&mut alloc, &mut flash).unwrap();
 
     match options.command {
