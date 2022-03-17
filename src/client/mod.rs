@@ -255,11 +255,18 @@ impl<'a> FobnailClient<'a> {
                         // release current borrow to avoid panic.
                         drop(trussed);
 
+                        // For now we are unable to completely avoid copying
+                        // data around because metadata hash goes through a few
+                        // states. Move data now to heap so we have to move only
+                        // pointer to that data.
+                        let mut hash_copy = Vec::new();
+                        hash_copy.extend_from_slice(hash.as_slice());
+
                         if Self::do_verify_metadata(&metadata) {
-                            *state = State::StoreMetadata {
-                                metadata,
-                                hash,
+                            *state = State::RequestRim {
+                                metadata_hash: hash_copy,
                                 aik_pubkey: Rc::clone(aik_pubkey),
+                                request_pending: false,
                             }
                         } else {
                             *state = State::Idle {
@@ -275,23 +282,6 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
-            State::StoreMetadata {
-                hash, aik_pubkey, ..
-            } => {
-                let mut trussed = self.trussed_platform.borrow_mut();
-                let hash = hash.as_slice().try_into().expect("Invalid hash length");
-                if !Self::have_metadata_hash(&mut *trussed, hash) {
-                    Self::store_metadata_hash(&mut *trussed, hash);
-                } else {
-                    debug!("/meta/{} already in DB", Self::format_hash(hash));
-                }
-
-                *state = State::RequestRim {
-                    request_pending: false,
-                    metadata_hash: trussed::types::Bytes::from_slice(hash).unwrap(),
-                    aik_pubkey: Rc::clone(aik_pubkey),
-                };
-            }
             State::RequestRim {
                 request_pending, ..
             } => {
@@ -305,12 +295,38 @@ impl<'a> FobnailClient<'a> {
                     *request_pending = true;
                 }
             }
-            State::VerifyRim { rim, aik_pubkey } => {
+            State::VerifyStoreRim {
+                rim,
+                aik_pubkey,
+                metadata_hash,
+            } => {
                 let mut trussed = self.trussed_platform.borrow_mut();
                 match Self::do_verify_rim(&mut *trussed, &rim, aik_pubkey) {
-                    Ok(()) => {
-                        *state = State::Idle {
-                            timeout: Some(get_time_ms() as u64 + 5000),
+                    Ok((_, raw_rim)) => {
+                        // Save raw RIM as encoded by attester, RIM contents are
+                        // already verified by checking signature and verifying
+                        // sanity of the RIM itself.
+                        // Avoid re-encoding and save it as-is but with stripped
+                        // signature which we don't need anymore.
+                        match Self::store_rim(
+                            &mut *trussed,
+                            metadata_hash
+                                .as_slice()
+                                .try_into()
+                                .expect("invalid length of metadata hash"),
+                            raw_rim,
+                        ) {
+                            Ok(()) => {
+                                *state = State::Idle {
+                                    timeout: Some(get_time_ms() as u64 + 5000),
+                                }
+                            }
+                            Err(()) => {
+                                error!("Failed to save RIM in persistent storage");
+                                *state = State::Idle {
+                                    timeout: Some(get_time_ms() as u64 + 5000),
+                                }
+                            }
                         }
                     }
                     Err(()) => {
@@ -356,10 +372,9 @@ impl<'a> FobnailClient<'a> {
             | State::Idle { .. }
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
-            | State::StoreMetadata { .. }
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
-            | State::VerifyRim { .. } => {
+            | State::VerifyStoreRim { .. } => {
                 unreachable!()
             }
         }
@@ -454,10 +469,9 @@ impl<'a> FobnailClient<'a> {
             | State::Idle { .. }
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
-            | State::StoreMetadata { .. }
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
-            | State::VerifyRim { .. } => {
+            | State::VerifyStoreRim { .. } => {
                 unreachable!()
             }
         }
@@ -548,11 +562,22 @@ impl<'a> FobnailClient<'a> {
                     };
                 }
             }
-            State::RequestRim { aik_pubkey, .. } => {
+            State::RequestRim {
+                aik_pubkey,
+                metadata_hash,
+                ..
+            } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
-                    *state = State::VerifyRim {
+                    // Trick to move data without copying.
+                    // Rust won't allow us just move out data because doing
+                    // so would make state invalid.
+                    let mut hash = vec![];
+                    core::mem::swap(metadata_hash, &mut hash);
+
+                    *state = State::VerifyStoreRim {
                         rim: result.payload,
                         aik_pubkey: Rc::clone(aik_pubkey),
+                        metadata_hash: hash,
                     }
                 } else {
                     error!("Server gave invalid response to RIM request");
@@ -567,10 +592,9 @@ impl<'a> FobnailClient<'a> {
             | State::Idle { .. }
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
-            | State::StoreMetadata { .. }
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
-            | State::VerifyRim { .. } => {
+            | State::VerifyStoreRim { .. } => {
                 unreachable!()
             }
         }
@@ -586,6 +610,7 @@ impl<'a> FobnailClient<'a> {
         T: trussed::client::CryptoClient,
     {
         signing::decode_signed_object::<_, proto::Metadata>(trussed, metadata, key)
+            .map(|(meta, _, hash)| (meta, hash))
     }
 
     /// Verify correctness of the metadata itself.
@@ -604,7 +629,7 @@ impl<'a> FobnailClient<'a> {
         true
     }
 
-    fn format_hash(hash: &[u8]) -> String {
+    fn format_hex(hash: &[u8]) -> String {
         use core::fmt;
 
         struct Writer<'a>(&'a [u8]);
@@ -619,37 +644,54 @@ impl<'a> FobnailClient<'a> {
         format!("{}", Writer(hash))
     }
 
-    /// Checks whether metadata hash is already stored
-    fn have_metadata_hash<T>(trussed: &mut T, hash: &[u8; 32]) -> bool
-    where
-        T: trussed::client::FilesystemClient,
-    {
-        let hash = Self::format_hash(hash);
-        let dir = PathBuf::from(b"/meta/");
-        let r = trussed::syscall!(trussed.locate_file(
-            Location::Internal,
-            Some(dir),
-            PathBuf::from(hash.as_str())
-        ));
-        r.path.is_some()
-    }
-
     /// Store SHA-256 hash into non-volatile memory.
-    fn store_metadata_hash<T>(trussed: &mut T, hash: &[u8; 32])
+    fn store_rim<T>(trussed: &mut T, metadata_hash: &[u8; 32], rim: &[u8]) -> Result<(), ()>
     where
         T: trussed::client::FilesystemClient,
     {
         // Use filesystem as a database:
-        // Hash is stored by creating an empty file with a name like this:
+        // RIM is stored by creating a file with a name like this:
         // /meta/8784060ad4fd3d48a494e4db8051b8e56fbdd30b16f9a8c040e5ed1943d06edd
+        // Hash is created by hashing platform metadata.
 
-        let data = Message::new();
-        let hash = Self::format_hash(hash);
-        let path = format!("/meta/{}", hash);
-        debug!("Writing {}", path);
+        let metadata_hash = Self::format_hex(metadata_hash);
+        let meta_dir = PathBuf::from(b"/meta/");
+        let path_str = format!("/meta/{}", metadata_hash);
 
-        let path = PathBuf::from(path.as_str());
-        trussed::syscall!(trussed.write_file(Location::Internal, path, data, None));
+        let mut locate = trussed::syscall!(trussed.locate_file(
+            Location::Internal,
+            Some(meta_dir),
+            PathBuf::from(metadata_hash.as_str())
+        ));
+        if let Some(path) = locate.path.take() {
+            // File already exists, compare contents of with the old RIM and
+            // current RIM, if these are the same avoid writing to flash.
+            let r = trussed::syscall!(trussed.read_file(Location::Internal, path));
+            if r.data == rim {
+                debug!("{} didn't change since last write", path_str);
+                return Ok(());
+            }
+        }
+
+        let path = PathBuf::from(path_str.as_str());
+        if rim.len() > trussed::config::MAX_MESSAGE_LENGTH {
+            error!(
+                "RIM is too big: size exceeds MAX_MESSAGE_LENGTH ({} vs {})",
+                rim.len(),
+                trussed::config::MAX_MESSAGE_LENGTH
+            );
+            Err(())
+        } else {
+            let rim = Message::from_slice(rim).unwrap();
+            trussed::try_syscall!(trussed.write_file(Location::Internal, path, rim, None))
+                .map_err(|e| {
+                    error!("Failed to save RIM: {:?}", e);
+                    ()
+                })?;
+
+            info!("Wrote {}", path_str);
+            Ok(())
+        }
     }
 
     fn verify_ek_certificate<T>(
@@ -795,11 +837,16 @@ impl<'a> FobnailClient<'a> {
         }
     }
 
-    fn do_verify_rim<T>(trussed: &mut T, rim: &[u8], aik: &Rc<crypto::Key>) -> Result<(), ()>
+    fn do_verify_rim<'r, T>(
+        trussed: &mut T,
+        rim_with_sig: &'r [u8],
+        aik: &Rc<crypto::Key>,
+    ) -> Result<(proto::Rim<'r>, &'r [u8]), ()>
     where
         T: trussed::client::CryptoClient,
     {
-        let (rim, _) = signing::decode_signed_object::<_, proto::Rim>(trussed, rim, &aik)?;
+        let (rim, raw_rim, _) =
+            signing::decode_signed_object::<_, proto::Rim>(trussed, rim_with_sig, &aik)?;
 
         Self::do_verify_pcrs(&rim.sha1, 20)?;
         Self::do_verify_pcrs(&rim.sha256, 32)?;
@@ -807,26 +854,26 @@ impl<'a> FobnailClient<'a> {
 
         if rim.sha1.pcrs != 0 {
             info!("sha1:");
-            for pcr in rim.sha1.pcr {
-                info!("  {}", Self::format_hash(pcr));
+            for pcr in rim.sha1.pcr.iter() {
+                info!("  {}", Self::format_hex(pcr));
             }
         }
 
         if rim.sha256.pcrs != 0 {
             info!("sha256:");
-            for pcr in rim.sha256.pcr {
-                info!("  {}", Self::format_hash(pcr));
+            for pcr in rim.sha256.pcr.iter() {
+                info!("  {}", Self::format_hex(pcr));
             }
         }
 
         if rim.sha384.pcrs != 0 {
             info!("sha384:");
-            for pcr in rim.sha384.pcr {
-                info!("  {}", Self::format_hash(pcr));
+            for pcr in rim.sha384.pcr.iter() {
+                info!("  {}", Self::format_hex(pcr));
             }
         }
 
-        Ok(())
+        Ok((rim, raw_rim))
     }
 
     fn do_verify_pcrs(pcrs: &proto::Pcrs, expected_pcr_len: usize) -> Result<(), ()> {

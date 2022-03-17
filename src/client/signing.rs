@@ -13,7 +13,7 @@ pub fn decode_signed_object<'a: 'de, 'de, S, T>(
     trussed: &mut S,
     data: &'a [u8],
     signing_key: &crypto::Key,
-) -> Result<(T, trussed::types::ShortData), ()>
+) -> Result<(T, &'a [u8], trussed::types::ShortData), ()>
 where
     S: trussed::client::CryptoClient,
     T: Deserialize<'de> + 'a,
@@ -57,7 +57,7 @@ where
                                 e
                             )
                         })?;
-                    Ok((inner_object, sha.hash))
+                    Ok((inner_object, signed_object.data, sha.hash))
                 }
                 Ok(_) => {
                     error!("Signature is invalid");
@@ -95,7 +95,7 @@ where
                                 e
                             )
                         })?;
-                    Ok((inner_object, sha.hash))
+                    Ok((inner_object, signed_object.data, sha.hash))
                 }
                 Err(e) => {
                     error!("Signature verification failed: {}", e);

@@ -5,7 +5,6 @@ use core::fmt;
 use crate::certmgr::X509Certificate;
 
 use super::crypto::Key;
-use super::proto::Metadata;
 
 pub enum State<'a> {
     /// Repeat hello request until server responds.
@@ -66,25 +65,18 @@ pub enum State<'a> {
         metadata: Vec<u8>,
     },
 
-    // TODO: implement this, must store metadata in persistent storage.
-    StoreMetadata {
-        metadata: Metadata,
-        /// Hash of metadata
-        hash: trussed::Bytes<128>,
-        aik_pubkey: Rc<Key<'a>>,
-    },
-
     /// Request Reference Integrity Manifests from attester.
     RequestRim {
         /// RIMs are bound to a specific device. We use metadata hashes to
         /// distinguish these devices.
-        metadata_hash: trussed::Bytes<128>,
+        metadata_hash: Vec<u8>,
         aik_pubkey: Rc<Key<'a>>,
         request_pending: bool,
     },
 
     /// Verify Reference Integrity Manifest
-    VerifyRim {
+    VerifyStoreRim {
+        metadata_hash: Vec<u8>,
         rim: Vec<u8>,
         aik_pubkey: Rc<Key<'a>>,
     },
@@ -114,9 +106,8 @@ impl fmt::Display for State<'_> {
             Self::LoadAik { .. } => write!(f, "load AIK"),
             Self::RequestMetadata { .. } => write!(f, "request metadata"),
             Self::VerifyMetadata { .. } => write!(f, "verify metadata"),
-            Self::StoreMetadata { .. } => write!(f, "store metadata"),
             Self::RequestRim { .. } => write!(f, "request RIM"),
-            Self::VerifyRim { .. } => write!(f, "verify RIM"),
+            Self::VerifyStoreRim { .. } => write!(f, "verify RIM"),
             Self::Idle { .. } => write!(f, "idle"),
         }
     }
