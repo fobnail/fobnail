@@ -1,0 +1,784 @@
+use core::cell::RefCell;
+
+use alloc::{rc::Rc, vec::Vec};
+use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
+use smoltcp::socket::{SocketRef, UdpSocket};
+use trussed::{
+    api::reply::RandomBytes,
+    types::{Location, Message, PathBuf},
+};
+
+use crate::{
+    certmgr::{CertMgr, X509Certificate},
+    coap::{CoapClient, Error},
+    pal::timer::get_time_ms,
+};
+use state::State;
+
+use super::{
+    crypto,
+    crypto::RsaKey,
+    proto, signing, tpm,
+    util::{format_hex, HexFormatter},
+};
+
+mod state;
+
+/// Client which speaks to attester in order to perform platform provisioning.
+pub struct FobnailClient<'a> {
+    state: Rc<RefCell<State<'a>>>,
+    coap_client: CoapClient<'a>,
+    trussed: RefCell<&'a mut trussed::ClientImplementation<pal::trussed::Syscall>>,
+    certmgr: CertMgr,
+}
+
+impl<'a> FobnailClient<'a> {
+    pub fn new(
+        coap_client: CoapClient<'a>,
+        trussed: &'a mut trussed::ClientImplementation<pal::trussed::Syscall>,
+    ) -> Self {
+        Self {
+            state: Rc::new(RefCell::new(State::default())),
+            coap_client,
+            trussed: RefCell::new(trussed),
+            certmgr: CertMgr {},
+        }
+    }
+
+    /// Reclaim ownership of Trussed client.
+    pub fn into_trussed(self) -> &'a mut trussed::ClientImplementation<pal::trussed::Syscall> {
+        let Self { trussed, .. } = self;
+        trussed.into_inner()
+    }
+
+    /// Checks whether provisioning is done.
+    pub fn done(&self) -> bool {
+        let state = &*self.state;
+        let state = &mut *state.borrow_mut();
+
+        matches!(state, State::Done)
+    }
+
+    pub fn poll(&mut self, socket: SocketRef<'_, UdpSocket>) {
+        self.coap_client.poll(socket);
+
+        let state = &*self.state;
+        let state = &mut *state.borrow_mut();
+
+        match state {
+            State::Done => {
+                unreachable!("Should not be polled in this state");
+            }
+            State::Idle { timeout } => {
+                if let Some(timeout) = timeout {
+                    if get_time_ms() as u64 > *timeout {
+                        *state = State::default();
+                    }
+                }
+            }
+            State::Init {
+                ref mut request_pending,
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/attest");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::InitDataReceived { data } => {
+                match ::core::str::from_utf8(&data[..]) {
+                    Ok(s) => {
+                        info!("Received response from server: {}", s);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Received response from server but it's not a valid UTF-8 string: {}",
+                            e
+                        );
+                    }
+                }
+
+                *state = State::RequestEkCert {
+                    request_pending: false,
+                }
+            }
+            State::RequestEkCert {
+                ref mut request_pending,
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/ek");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::VerifyEkCertificate { data } => {
+                let mut trussed = self.trussed.borrow_mut();
+
+                let cert = match self.certmgr.load_cert_owned(data) {
+                    Ok(cert) => match Self::verify_ek_certificate(&self.certmgr, &cert, *trussed) {
+                        Ok(()) => Some(cert),
+                        Err(e) => {
+                            error!("Failed to verify EK certificate: {}", e);
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to load EK certificate: {}", e);
+                        None
+                    }
+                };
+
+                if let Some(cert) = cert {
+                    *state = State::RequestAik {
+                        request_pending: false,
+                        ek_cert: Some(cert),
+                    };
+                } else {
+                    state.error();
+                }
+            }
+            State::RequestAik {
+                ref mut request_pending,
+                ..
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/aik");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::VerifyAikStage1 { data, ek_cert } => {
+                let mut trussed = self.trussed.borrow_mut();
+
+                match tpm::aik::decode(*trussed, data).and_then(|(_tpm_public, loaded_key_name)| {
+                    Self::prepare_aik_challenge(
+                        *trussed,
+                        tpm::mu::LoadedKeyName::decode(&loaded_key_name).unwrap(),
+                        ek_cert,
+                    )
+                }) {
+                    Ok((secret, id_object, encrypted_secret)) => {
+                        // Trick to move data without copying.
+                        // Rust won't allow us just move out data because doing
+                        // so would make state invalid.
+                        let mut aik = vec![];
+                        core::mem::swap(data, &mut aik);
+
+                        let mut secret_copy = Vec::new();
+                        secret_copy.extend_from_slice(secret.as_slice());
+
+                        *state = State::VerifyAikStage2 {
+                            request_pending: false,
+                            secret: secret_copy,
+                            id_object,
+                            encrypted_secret,
+                            aik,
+                        }
+                    }
+                    Err(()) => {
+                        error!("AIK verification failed");
+                        state.error();
+                    }
+                }
+            }
+            State::VerifyAikStage2 {
+                request_pending,
+                id_object,
+                encrypted_secret,
+                ..
+            } => {
+                if !*request_pending {
+                    let encoded = trussed::cbor_serialize_bytes::<_, 512>(&proto::Challenge {
+                        id_object: &id_object,
+                        encrypted_secret,
+                    })
+                    .unwrap();
+
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/challenge");
+                    request.set_method(RequestType::Post);
+                    request.message.payload = encoded.to_vec();
+                    request
+                        .message
+                        .set_content_format(ContentFormat::ApplicationCBOR);
+
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+
+                    *request_pending = true;
+                }
+            }
+            State::LoadAik { raw_aik } => match tpm::aik::load(&raw_aik) {
+                Ok(aik) => {
+                    *state = State::RequestMetadata {
+                        aik_pubkey: aik,
+                        request_pending: false,
+                    };
+                }
+                Err(()) => {
+                    error!("Failed to load AIK");
+                    state.error();
+                }
+            },
+            State::RequestMetadata {
+                request_pending, ..
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/metadata");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::VerifyMetadata {
+                metadata,
+                aik_pubkey,
+            } => {
+                let mut trussed = self.trussed.borrow_mut();
+
+                match Self::do_verify_metadata_signature(*trussed, metadata, aik_pubkey) {
+                    Ok((metadata, hash)) => {
+                        info!("Received attester metadata:");
+                        info!("  Version      : {}", metadata.version);
+                        info!("  MAC          : {}", metadata.mac);
+                        info!("  Manufacturer : {}", metadata.manufacturer);
+                        info!("  Product      : {}", metadata.product_name);
+                        info!("  Serial       : {}", metadata.serial_number);
+                        // Changing state will trigger destructor of AIK key,
+                        // removing it from Trussed keystore. Destructor calls
+                        // a closure which borrows trussed client, so we need to
+                        // release current borrow to avoid panic.
+                        drop(trussed);
+
+                        // For now we are unable to completely avoid copying
+                        // data around because metadata hash goes through a few
+                        // states. Move data now to heap so we have to move only
+                        // pointer to that data.
+                        let mut hash_copy = Vec::new();
+                        hash_copy.extend_from_slice(hash.as_slice());
+
+                        if Self::do_verify_metadata(&metadata) {
+                            *state = State::RequestRim {
+                                metadata_hash: hash_copy,
+                                aik_pubkey: Rc::clone(aik_pubkey),
+                                request_pending: false,
+                            }
+                        } else {
+                            state.error();
+                        }
+                    }
+                    Err(_e) => {
+                        error!("Metadata invalid");
+                        state.error();
+                    }
+                }
+            }
+            State::RequestRim {
+                request_pending, ..
+            } => {
+                if !*request_pending {
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/rim");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                    *request_pending = true;
+                }
+            }
+            State::VerifyStoreRim {
+                rim,
+                aik_pubkey,
+                metadata_hash,
+            } => {
+                let mut trussed = self.trussed.borrow_mut();
+                match Self::do_verify_rim(*trussed, &rim, aik_pubkey) {
+                    Ok((_, raw_rim)) => {
+                        // Save raw RIM as encoded by attester, RIM contents are
+                        // already verified by checking signature and verifying
+                        // sanity of the RIM itself.
+                        // Avoid re-encoding and save it as-is but with stripped
+                        // signature which we don't need anymore.
+                        match Self::store_rim(
+                            *trussed,
+                            metadata_hash
+                                .as_slice()
+                                .try_into()
+                                .expect("invalid length of metadata hash"),
+                            raw_rim,
+                        ) {
+                            Ok(()) => {
+                                info!("Provisioning complete");
+                                state.done();
+                            }
+                            Err(()) => {
+                                error!("Failed to save RIM in persistent storage");
+                                state.error();
+                            }
+                        }
+                    }
+                    Err(()) => {
+                        error!("RIM verification failed");
+                        state.error();
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_response(result: Result<Packet, Error>, state: Rc<RefCell<State>>) {
+        match result {
+            Ok(resp) => Self::handle_server_response(resp, state),
+            Err(e) => Self::handle_coap_error(e, state),
+        }
+    }
+
+    /// Handles communication errors like timeouts or malformed response packets
+    fn handle_coap_error(error: Error, state: Rc<RefCell<State>>) {
+        let state = &*state;
+        let state = &mut *state.borrow_mut();
+        match state {
+            State::Init { .. }
+            | State::RequestMetadata { .. }
+            | State::RequestAik { .. }
+            | State::RequestEkCert { .. }
+            | State::VerifyAikStage2 { .. }
+            | State::RequestRim { .. } => {
+                error!(
+                    "Communication with attester failed (state {}): {:#?}, retrying after 5s",
+                    state, error
+                );
+                state.error();
+            }
+            // We don't send any requests during these states so we shouldn't
+            // get responses.
+            State::InitDataReceived { .. }
+            | State::Idle { .. }
+            | State::Done
+            | State::VerifyEkCertificate { .. }
+            | State::VerifyMetadata { .. }
+            | State::VerifyAikStage1 { .. }
+            | State::LoadAik { .. }
+            | State::VerifyStoreRim { .. } => {
+                unreachable!()
+            }
+        }
+    }
+
+    /// Handles server error responses - communication with server works and we
+    /// received a valid response, but that response contains an error.
+    fn handle_server_error_response(result: &Packet, state: &Rc<RefCell<State>>) -> bool {
+        match result.header.code {
+            #[rustfmt::skip]
+            MessageClass::Response(r) => match r {
+                // 200 (success codes)
+                ResponseType::Created => return false,
+                ResponseType::Deleted => return false,
+                ResponseType::Valid => return false,
+                ResponseType::Changed => return false,
+                ResponseType::Content => return false,
+                ResponseType::Continue => return false,
+
+                // 400 codes
+                ResponseType::BadRequest => error!("server error: Bad request"),
+                ResponseType::Unauthorized => error!("server error: Unauthorized"),
+                ResponseType::BadOption => error!("server error: Bad option"),
+                ResponseType::Forbidden => error!("server error: Forbidden"),
+                ResponseType::NotFound => error!("server error: Not found"),
+                ResponseType::MethodNotAllowed => error!("server error: Method not allowed"),
+                ResponseType::NotAcceptable => error!("server error: Not acceptable"),
+                ResponseType::Conflict => error!("server error: Conflict"),
+                ResponseType::PreconditionFailed => error!("server error: Precondition failed"),
+                ResponseType::RequestEntityTooLarge => error!("server error: RequestEntityTooLarge"),
+                ResponseType::UnsupportedContentFormat => error!("server error: Unsupported content format"),
+                ResponseType::RequestEntityIncomplete => error!("server error: Request entity incomplete"),
+                ResponseType::UnprocessableEntity => error!("server error: Unprocessable entity"),
+                ResponseType::TooManyRequests => error!("server error: Too many requests"),
+                // 500 codes
+                ResponseType::InternalServerError => error!("server error: Internal server error"),
+                ResponseType::NotImplemented => error!("server error: Not implemented"),
+                ResponseType::BadGateway => error!("server error: Bad gateway"),
+                ResponseType::ServiceUnavailable => error!("server error: Service unavailable"),
+                ResponseType::GatewayTimeout => error!("server error: Gateway timeout"),
+                ResponseType::ProxyingNotSupported => error!("server error: Proxying not supported"),
+                ResponseType::HopLimitReached => error!("server error: Hop limit Reached"),
+
+                ResponseType::UnKnown => error!("unknown server error"),
+            },
+            // CoapClient revokes any packets that are not response packet
+            _ => unreachable!("This packet type should be handled by CoapClient"),
+        }
+
+        let state = &*state;
+        let state = &mut *state.borrow_mut();
+        match state {
+            State::Init { .. } => {
+                error!("Retrying in 5s ...");
+                state.error();
+            }
+            State::RequestEkCert { .. } => {
+                error!("Failed to request EK certificate, retrying in 5s");
+                state.error();
+            }
+            State::RequestAik { .. } => {
+                error!("Failed to request AIK key, retrying in 5s");
+                state.error();
+            }
+            State::VerifyAikStage2 { .. } => {
+                error!("Failed to send challenge, retrying in 5s");
+                state.error();
+            }
+            State::RequestMetadata { .. } => {
+                error!("Failed to request metadata, retrying in 5s");
+                state.error();
+            }
+            State::RequestRim { .. } => {
+                error!("Failed to request RIM, retrying in 5s");
+                state.error();
+            }
+            // We don't send any requests during these states so we shouldn't
+            // get responses.
+            State::InitDataReceived { .. }
+            | State::Idle { .. }
+            | State::VerifyEkCertificate { .. }
+            | State::VerifyMetadata { .. }
+            | State::VerifyAikStage1 { .. }
+            | State::LoadAik { .. }
+            | State::VerifyStoreRim { .. }
+            | State::Done => {
+                unreachable!()
+            }
+        }
+
+        true
+    }
+
+    fn handle_server_response(result: Packet, state: Rc<RefCell<State>>) {
+        if Self::handle_server_error_response(&result, &state) {
+            return;
+        }
+
+        let state = &*state;
+        let state = &mut *state.borrow_mut();
+
+        match state {
+            State::Init { .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::InitDataReceived {
+                        data: result.payload,
+                    };
+                } else {
+                    error!("Server gave invalid response to init request");
+                    state.error();
+                }
+            }
+            State::RequestEkCert { .. } => {
+                info!("Received EK certificate");
+
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::VerifyEkCertificate {
+                        data: result.payload,
+                    }
+                } else {
+                    error!("Server gave invalid response to EK request");
+                    state.error();
+                }
+            }
+            State::RequestAik { ek_cert, .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::VerifyAikStage1 {
+                        data: result.payload,
+                        ek_cert: ek_cert.take().unwrap(),
+                    };
+                } else {
+                    error!("Server gave invalid response to AIK request");
+                    state.error();
+                }
+            }
+            State::VerifyAikStage2 { secret, aik, .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Created) {
+                    if result.payload.as_slice() == secret.as_slice() {
+                        // Trick to move data without copying.
+                        // Rust won't allow us just move out data because doing
+                        // so would make state invalid.
+                        let mut raw_aik = vec![];
+                        core::mem::swap(aik, &mut raw_aik);
+                        *state = State::LoadAik { raw_aik };
+                    } else {
+                        error!("Attester has failed challenge");
+                        state.error();
+                    }
+                } else {
+                    error!("Invalid response during AIK stage 1 verification");
+                    state.error();
+                }
+            }
+            State::RequestMetadata { aik_pubkey, .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::VerifyMetadata {
+                        metadata: result.payload,
+                        aik_pubkey: Rc::clone(aik_pubkey),
+                    }
+                } else {
+                    error!("Server gave invalid response to metadata request");
+                    state.error();
+                }
+            }
+            State::RequestRim {
+                aik_pubkey,
+                metadata_hash,
+                ..
+            } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    // Trick to move data without copying.
+                    // Rust won't allow us just move out data because doing
+                    // so would make state invalid.
+                    let mut hash = vec![];
+                    core::mem::swap(metadata_hash, &mut hash);
+
+                    *state = State::VerifyStoreRim {
+                        rim: result.payload,
+                        aik_pubkey: Rc::clone(aik_pubkey),
+                        metadata_hash: hash,
+                    }
+                } else {
+                    error!("Server gave invalid response to RIM request");
+                    state.error();
+                }
+            }
+            // We don't send any requests during these states so we shouldn't
+            // get responses.
+            State::InitDataReceived { .. }
+            | State::Idle { .. }
+            | State::VerifyEkCertificate { .. }
+            | State::VerifyMetadata { .. }
+            | State::VerifyAikStage1 { .. }
+            | State::LoadAik { .. }
+            | State::VerifyStoreRim { .. }
+            | State::Done => {
+                unreachable!()
+            }
+        }
+    }
+
+    /// Verify cryptographic signature of metadata.
+    fn do_verify_metadata_signature<T>(
+        trussed: &mut T,
+        metadata: &[u8],
+        key: &crypto::Key,
+    ) -> Result<(proto::Metadata, trussed::Bytes<128>), ()>
+    where
+        T: trussed::client::CryptoClient,
+    {
+        signing::decode_signed_object::<_, proto::Metadata>(trussed, metadata, key)
+            .map(|(meta, _, hash)| (meta, hash))
+    }
+
+    /// Verify correctness of the metadata itself.
+    fn do_verify_metadata(metadata: &proto::Metadata) -> bool {
+        if metadata.version != proto::CURRENT_VERSION {
+            error!(
+                "Unsupported metadata version {}, expected version {}",
+                metadata.version,
+                proto::CURRENT_VERSION
+            );
+            return false;
+        }
+
+        // TODO: maybe should verify that strings aren't empty
+
+        true
+    }
+
+    /// Store SHA-256 hash into non-volatile memory.
+    fn store_rim<T>(trussed: &mut T, metadata_hash: &[u8; 32], rim: &[u8]) -> Result<(), ()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        // Use filesystem as a database:
+        // RIM is stored by creating a file with a name like this:
+        // /meta/8784060ad4fd3d48a494e4db8051b8e56fbdd30b16f9a8c040e5ed1943d06edd
+        // Hash is created by hashing platform metadata.
+
+        let metadata_hash = format_hex(metadata_hash);
+        let meta_dir = PathBuf::from(b"/meta/");
+        let path_str = format!("/meta/{}", metadata_hash);
+
+        let mut locate = trussed::syscall!(trussed.locate_file(
+            Location::Internal,
+            Some(meta_dir),
+            PathBuf::from(metadata_hash.as_str())
+        ));
+        if let Some(path) = locate.path.take() {
+            // File already exists, compare contents of with the old RIM and
+            // current RIM, if these are the same avoid writing to flash.
+            let r = trussed::syscall!(trussed.read_file(Location::Internal, path));
+            if r.data == rim {
+                debug!("{} didn't change since last write", path_str);
+                return Ok(());
+            }
+        }
+
+        let path = PathBuf::from(path_str.as_str());
+        if rim.len() > trussed::config::MAX_MESSAGE_LENGTH {
+            error!(
+                "RIM is too big: size exceeds MAX_MESSAGE_LENGTH ({} vs {})",
+                rim.len(),
+                trussed::config::MAX_MESSAGE_LENGTH
+            );
+            Err(())
+        } else {
+            let rim = Message::from_slice(rim).unwrap();
+            trussed::try_syscall!(trussed.write_file(Location::Internal, path, rim, None))
+                .map_err(|e| {
+                    error!("Failed to save RIM: {:?}", e);
+                })?;
+
+            info!("Wrote {}", path_str);
+            Ok(())
+        }
+    }
+
+    fn verify_ek_certificate<T>(
+        certmgr: &CertMgr,
+        cert: &X509Certificate,
+        trussed: &mut T,
+    ) -> crate::certmgr::Result<()>
+    where
+        T: trussed::client::FilesystemClient + trussed::client::Sha256,
+    {
+        info!("X.509 version {}", cert.version());
+        let issuer = cert.issuer()?;
+        info!("Issuer: {}", issuer);
+        let subject = cert.subject()?;
+        info!("Subject: {}", subject);
+        let key = cert.key()?;
+        info!("Key: {}", key);
+
+        certmgr.verify(trussed, cert)?;
+
+        Ok(())
+    }
+
+    fn prepare_aik_challenge<T>(
+        trussed: &mut T,
+        loaded_key_name: tpm::mu::LoadedKeyName,
+        ek_cert: &X509Certificate,
+    ) -> Result<
+        (
+            trussed::types::Bytes<{ trussed::config::MAX_MESSAGE_LENGTH }>,
+            Vec<u8>,
+            Vec<u8>,
+        ),
+        (),
+    >
+    where
+        T: trussed::client::CryptoClient + trussed::client::Sha256 + trussed::client::Aes256Cbc,
+    {
+        let RandomBytes { bytes: secret } = trussed::try_syscall!(trussed.random_bytes(32))
+            .map_err(|e| {
+                error!("Failed to generate secret: {:?}", e);
+            })?;
+
+        match ek_cert.key().map_err(|e| {
+            error!("Failed to extract EK public key: {}", e);
+        })? {
+            crate::certmgr::Key::Rsa { n, e } => {
+                let ek_key = RsaKey::load(n, e)?;
+
+                let (id_object, encrypted_secret) = tpm::make_credential_rsa(
+                    trussed,
+                    loaded_key_name,
+                    &ek_key,
+                    16,
+                    secret.as_slice(),
+                )
+                .unwrap();
+
+                Ok((secret, id_object, encrypted_secret))
+            }
+        }
+    }
+
+    fn do_verify_rim<'r, T>(
+        trussed: &mut T,
+        rim_with_sig: &'r [u8],
+        aik: &Rc<crypto::Key>,
+    ) -> Result<(proto::Rim<'r>, &'r [u8]), ()>
+    where
+        T: trussed::client::CryptoClient,
+    {
+        let (rim, raw_rim, _) =
+            signing::decode_signed_object::<_, proto::Rim>(trussed, rim_with_sig, &aik)?;
+
+        Self::do_verify_pcrs(&rim.sha1, 20)?;
+        Self::do_verify_pcrs(&rim.sha256, 32)?;
+        Self::do_verify_pcrs(&rim.sha384, 48)?;
+
+        if rim.sha1.pcrs != 0 {
+            info!("sha1:");
+            for pcr in rim.sha1.pcr.iter() {
+                info!("  {}", HexFormatter(pcr));
+            }
+        }
+
+        if rim.sha256.pcrs != 0 {
+            info!("sha256:");
+            for pcr in rim.sha256.pcr.iter() {
+                info!("  {}", HexFormatter(pcr));
+            }
+        }
+
+        if rim.sha384.pcrs != 0 {
+            info!("sha384:");
+            for pcr in rim.sha384.pcr.iter() {
+                info!("  {}", HexFormatter(pcr));
+            }
+        }
+
+        Ok((rim, raw_rim))
+    }
+
+    fn do_verify_pcrs(pcrs: &proto::Pcrs, expected_pcr_len: usize) -> Result<(), ()> {
+        // pcrs is a bitmask representing which PCRs are present and which are
+        // not.
+        let n1 = pcrs.pcrs.count_ones() as usize;
+        let n2 = pcrs.pcr.len();
+        if n1 != n2 {
+            error!(
+                "PCR count does not match, count from mask is {}, but really there are {} PCRs",
+                n1, n2
+            );
+            return Err(());
+        }
+
+        for pcr in pcrs.pcr.iter() {
+            if pcr.len() != expected_pcr_len {
+                error!(
+                    "Invalid PCR size {}, expected {}",
+                    pcr.len(),
+                    expected_pcr_len
+                );
+                return Err(());
+            }
+        }
+
+        Ok(())
+    }
+}
