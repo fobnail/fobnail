@@ -15,13 +15,15 @@ extern crate log;
 #[macro_use]
 extern crate alloc;
 
-use client::FobnailClient;
+use client::{attestation, provisioning};
 use smoltcp::iface::{EthernetInterfaceBuilder, Neighbor, NeighborCache};
 use smoltcp::socket::{SocketSet, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
 use smoltcp::time::Instant;
 use smoltcp::wire::{IpAddress, IpCidr, Ipv4Address};
 
 use coap::CoapClient;
+use trussed::types::{Location, PathBuf};
+use trussed::ClientImplementation;
 
 mod certmgr;
 mod client;
@@ -47,6 +49,57 @@ const SERVER_IP_ADDRESS: IpAddress = IpAddress::Ipv4(Ipv4Address::new(169, 254, 
 // See https://en.wikipedia.org/wiki/Ephemeral_port
 const COAP_LOCAL_PORT: u16 = 49152;
 
+/// Checks whether we have some RIMs saved in persistent memory. Used to detect
+/// whether we have already provisioned some platform (attester) and select
+/// default operation mode - if no platform is provisioned enter provisioning
+/// mode, otherwise enter attestation mode.
+fn have_rims<T>(trussed: &mut T) -> bool
+where
+    T: trussed::client::FilesystemClient,
+{
+    let meta_dir = PathBuf::from(b"/meta/");
+    let result = trussed::syscall!(trussed.read_dir_first(Location::Internal, meta_dir, None));
+    result.entry.is_some()
+}
+
+enum OperationMode<'a> {
+    Idle {
+        trussed: &'a mut ClientImplementation<pal::trussed::Syscall>,
+    },
+    Provisioning(provisioning::FobnailClient<'a>),
+    Attestation(attestation::FobnailClient<'a>),
+}
+
+impl<'a> OperationMode<'a> {
+    pub fn new(trussed: &'a mut ClientImplementation<pal::trussed::Syscall>) -> Self {
+        Self::Idle { trussed }
+    }
+
+    fn reclaim_trussed(
+        self,
+    ) -> &'a mut trussed::client::ClientImplementation<pal::trussed::Syscall> {
+        match self {
+            Self::Idle { trussed } => trussed,
+            Self::Provisioning(c) => c.into_trussed(),
+            Self::Attestation(c) => c.into_trussed(),
+        }
+    }
+
+    pub fn provisioning(self) -> Self {
+        Self::Provisioning(provisioning::FobnailClient::new(
+            CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT),
+            self.reclaim_trussed(),
+        ))
+    }
+
+    pub fn attestation(self) -> Self {
+        Self::Attestation(attestation::FobnailClient::new(
+            CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT),
+            self.reclaim_trussed(),
+        ))
+    }
+}
+
 fn make_udp_socket(max_packet: usize, port: u16) -> UdpSocket<'static> {
     let udp_rx = UdpSocketBuffer::new(
         vec![UdpPacketMetadata::EMPTY; UDP_META_DEFAULT_BUF_LEN],
@@ -67,7 +120,7 @@ fn make_udp_socket(max_packet: usize, port: u16) -> UdpSocket<'static> {
 fn main() -> ! {
     pal::init();
     let mut trussed_clients = pal::trussed::init(&["fobnail_client"]);
-    let trussed_fobnail_client = trussed_clients.pop().unwrap();
+    let mut trussed_fobnail_client = trussed_clients.pop().unwrap();
 
     let mut neighbor_cache_storage: [Option<(IpAddress, Neighbor)>; 16] = [None; 16];
     let neighbor_cache = NeighborCache::new(&mut neighbor_cache_storage[..]);
@@ -94,8 +147,13 @@ fn main() -> ! {
     let echo_socket_handle = socket_set.add(socket);
     let coap_socket_handle = socket_set.add(coap_socket);
 
-    let coap_client = CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT);
-    let mut fobnail_client = FobnailClient::new(coap_client, trussed_fobnail_client);
+    let have_rims = have_rims(&mut trussed_fobnail_client);
+    let mut operation_mode = OperationMode::new(&mut trussed_fobnail_client);
+    operation_mode = if !have_rims {
+        operation_mode.provisioning()
+    } else {
+        operation_mode.attestation()
+    };
 
     loop {
         match iface.poll(
@@ -125,7 +183,17 @@ fn main() -> ! {
         }
 
         // CoAP poll
-        fobnail_client.poll(socket_set.get::<UdpSocket>(coap_socket_handle));
+        let coap_socket = socket_set.get::<UdpSocket>(coap_socket_handle);
+        match operation_mode {
+            OperationMode::Provisioning(ref mut p) => {
+                p.poll(coap_socket);
+                if p.done() {
+                    operation_mode = operation_mode.attestation();
+                }
+            }
+            OperationMode::Attestation(ref mut a) => a.poll(coap_socket),
+            OperationMode::Idle { .. } => unreachable!(),
+        }
 
         pal::cpu_relax();
     }
