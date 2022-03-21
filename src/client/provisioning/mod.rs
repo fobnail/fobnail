@@ -3,22 +3,17 @@ use core::cell::RefCell;
 use alloc::{rc::Rc, vec::Vec};
 use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
 use smoltcp::socket::{SocketRef, UdpSocket};
-use trussed::{
-    api::reply::RandomBytes,
-    types::{Location, Message, PathBuf},
-};
+use trussed::types::{Location, Message, PathBuf};
 
 use crate::{
-    certmgr::{CertMgr, X509Certificate},
+    certmgr::CertMgr,
     coap::{CoapClient, Error},
     pal::timer::get_time_ms,
 };
 use state::State;
 
 use super::{
-    crypto,
-    crypto::RsaKey,
-    proto, signing, tpm,
+    crypto, proto, signing, tpm,
     util::{format_hex, handle_server_error_response, HexFormatter},
 };
 
@@ -120,7 +115,7 @@ impl<'a> FobnailClient<'a> {
             State::VerifyEkCertificate { data } => {
                 let mut trussed = self.trussed.borrow_mut();
 
-                match tpm::ek::load(*trussed, &self.certmgr, &data) {
+                match tpm::ek::load(*trussed, &self.certmgr, data) {
                     Ok(cert) => {
                         *state = State::RequestAik {
                             request_pending: false,
@@ -186,7 +181,7 @@ impl<'a> FobnailClient<'a> {
             } => {
                 if !*request_pending {
                     let encoded = trussed::cbor_serialize_bytes::<_, 512>(&proto::Challenge {
-                        id_object: &id_object,
+                        id_object,
                         encrypted_secret,
                     })
                     .unwrap();
@@ -206,7 +201,7 @@ impl<'a> FobnailClient<'a> {
                     *request_pending = true;
                 }
             }
-            State::LoadAik { raw_aik } => match tpm::aik::load(&raw_aik) {
+            State::LoadAik { raw_aik } => match tpm::aik::load(raw_aik) {
                 Ok(aik) => {
                     *state = State::RequestMetadata {
                         aik_pubkey: aik,
@@ -293,7 +288,7 @@ impl<'a> FobnailClient<'a> {
                 metadata_hash,
             } => {
                 let mut trussed = self.trussed.borrow_mut();
-                match Self::do_verify_rim(*trussed, &rim, aik_pubkey) {
+                match Self::do_verify_rim(*trussed, rim, aik_pubkey) {
                     Ok((_, raw_rim)) => {
                         // Save raw RIM as encoded by attester, RIM contents are
                         // already verified by checking signature and verifying
@@ -563,7 +558,7 @@ impl<'a> FobnailClient<'a> {
         T: trussed::client::CryptoClient,
     {
         let (rim, raw_rim, _) =
-            signing::decode_signed_object::<_, proto::Rim>(trussed, rim_with_sig, &aik)?;
+            signing::decode_signed_object::<_, proto::Rim>(trussed, rim_with_sig, aik)?;
 
         Self::do_verify_pcrs(&rim.sha1, 20)?;
         Self::do_verify_pcrs(&rim.sha256, 32)?;
