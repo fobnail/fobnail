@@ -3,10 +3,13 @@ use hmac::{Mac, NewMac};
 use rsa::PublicKey as _;
 use trussed::api::reply::RandomBytes;
 
+use crate::certmgr::X509Certificate;
+
 use super::crypto::RsaKey;
 
 mod aes;
 pub mod aik;
+pub mod ek;
 #[cfg(test)]
 mod fake_rng;
 mod kdf;
@@ -159,6 +162,37 @@ where
                 loaded_key_name.algorithm()
             );
             return Err(());
+        }
+    }
+}
+
+pub fn prepare_aik_challenge<T>(
+    trussed: &mut T,
+    loaded_key_name: mu::LoadedKeyName,
+    ek_cert: &X509Certificate,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), ()>
+where
+    T: trussed::client::CryptoClient + trussed::client::Sha256 + trussed::client::Aes256Cbc,
+{
+    let RandomBytes { bytes: secret } =
+        trussed::try_syscall!(trussed.random_bytes(32)).map_err(|e| {
+            error!("Failed to generate secret: {:?}", e);
+        })?;
+
+    match ek_cert.key().map_err(|e| {
+        error!("Failed to extract EK public key: {}", e);
+    })? {
+        crate::certmgr::Key::Rsa { n, e } => {
+            let ek_key = RsaKey::load(n, e)?;
+
+            let (id_object, encrypted_secret) =
+                make_credential_rsa(trussed, loaded_key_name, &ek_key, 16, secret.as_slice())
+                    .unwrap();
+
+            let mut secret_copy = Vec::new();
+            secret_copy.extend_from_slice(secret.as_slice());
+
+            Ok((secret_copy, id_object, encrypted_secret))
         }
     }
 }

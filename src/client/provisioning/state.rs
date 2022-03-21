@@ -114,10 +114,10 @@ impl Default for State<'_> {
 impl fmt::Display for State<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Init { .. } => write!(f, "init"),
+            Self::Init { .. } => write!(f, "send init request"),
             Self::InitDataReceived { .. } => write!(f, "init data received"),
-            Self::RequestEkCert { .. } => write!(f, "request EK cert"),
-            Self::VerifyEkCertificate { .. } => write!(f, "verify EK cert"),
+            Self::RequestEkCert { .. } => write!(f, "request EK certificate"),
+            Self::VerifyEkCertificate { .. } => write!(f, "verify EK certificate"),
             Self::RequestAik { .. } => write!(f, "request AIK"),
             Self::VerifyAikStage1 { .. } => write!(f, "verify AIK (stage 1)"),
             Self::VerifyAikStage2 { .. } => write!(f, "verify AIK (stage 2)"),

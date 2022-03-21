@@ -19,7 +19,7 @@ use super::{
     crypto,
     crypto::RsaKey,
     proto, signing, tpm,
-    util::{format_hex, HexFormatter},
+    util::{format_hex, handle_server_error_response, HexFormatter},
 };
 
 mod state;
@@ -53,8 +53,7 @@ impl<'a> FobnailClient<'a> {
 
     /// Checks whether provisioning is done.
     pub fn done(&self) -> bool {
-        let state = &*self.state;
-        let state = &mut *state.borrow_mut();
+        let state = &mut *(*self.state).borrow_mut();
 
         matches!(state, State::Done)
     }
@@ -62,8 +61,7 @@ impl<'a> FobnailClient<'a> {
     pub fn poll(&mut self, socket: SocketRef<'_, UdpSocket>) {
         self.coap_client.poll(socket);
 
-        let state = &*self.state;
-        let state = &mut *state.borrow_mut();
+        let state = &mut *(*self.state).borrow_mut();
 
         match state {
             State::Done => {
@@ -122,27 +120,17 @@ impl<'a> FobnailClient<'a> {
             State::VerifyEkCertificate { data } => {
                 let mut trussed = self.trussed.borrow_mut();
 
-                let cert = match self.certmgr.load_cert_owned(data) {
-                    Ok(cert) => match Self::verify_ek_certificate(&self.certmgr, &cert, *trussed) {
-                        Ok(()) => Some(cert),
-                        Err(e) => {
-                            error!("Failed to verify EK certificate: {}", e);
-                            None
-                        }
-                    },
+                match tpm::ek::load(*trussed, &self.certmgr, &data) {
+                    Ok(cert) => {
+                        *state = State::RequestAik {
+                            request_pending: false,
+                            ek_cert: Some(cert),
+                        };
+                    }
                     Err(e) => {
                         error!("Failed to load EK certificate: {}", e);
-                        None
+                        state.error()
                     }
-                };
-
-                if let Some(cert) = cert {
-                    *state = State::RequestAik {
-                        request_pending: false,
-                        ek_cert: Some(cert),
-                    };
-                } else {
-                    state.error();
                 }
             }
             State::RequestAik {
@@ -163,7 +151,7 @@ impl<'a> FobnailClient<'a> {
                 let mut trussed = self.trussed.borrow_mut();
 
                 match tpm::aik::decode(*trussed, data).and_then(|(_tpm_public, loaded_key_name)| {
-                    Self::prepare_aik_challenge(
+                    tpm::prepare_aik_challenge(
                         *trussed,
                         tpm::mu::LoadedKeyName::decode(&loaded_key_name).unwrap(),
                         ek_cert,
@@ -176,12 +164,9 @@ impl<'a> FobnailClient<'a> {
                         let mut aik = vec![];
                         core::mem::swap(data, &mut aik);
 
-                        let mut secret_copy = Vec::new();
-                        secret_copy.extend_from_slice(secret.as_slice());
-
                         *state = State::VerifyAikStage2 {
                             request_pending: false,
-                            secret: secret_copy,
+                            secret,
                             id_object,
                             encrypted_secret,
                             aik,
@@ -343,31 +328,26 @@ impl<'a> FobnailClient<'a> {
     }
 
     fn handle_response(result: Result<Packet, Error>, state: Rc<RefCell<State>>) {
-        match result {
-            Ok(resp) => Self::handle_server_response(resp, state),
-            Err(e) => Self::handle_coap_error(e, state),
-        }
-    }
+        let state = &mut *(*state).borrow_mut();
 
-    /// Handles communication errors like timeouts or malformed response packets
-    fn handle_coap_error(error: Error, state: Rc<RefCell<State>>) {
-        let state = &*state;
-        let state = &mut *state.borrow_mut();
         match state {
             State::Init { .. }
             | State::RequestMetadata { .. }
             | State::RequestAik { .. }
             | State::RequestEkCert { .. }
             | State::VerifyAikStage2 { .. }
-            | State::RequestRim { .. } => {
-                error!(
-                    "Communication with attester failed (state {}): {:#?}, retrying after 5s",
-                    state, error
-                );
-                state.error();
-            }
-            // We don't send any requests during these states so we shouldn't
-            // get responses.
+            | State::RequestRim { .. } => match result {
+                Ok(resp) => {
+                    Self::handle_server_response(resp, state);
+                }
+                Err(e) => {
+                    error!(
+                        "Communication with attester failed (state {}): {:#?}, retrying after 5s",
+                        state, e
+                    );
+                    state.error();
+                }
+            },
             State::InitDataReceived { .. }
             | State::Idle { .. }
             | State::Done
@@ -376,106 +356,25 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
             | State::VerifyStoreRim { .. } => {
-                unreachable!()
+                // We don't send any requests during these states so we shouldn't
+                // get responses.
+                unreachable!(
+                    "We shouldn't receive receive any response during this state ({})",
+                    state
+                )
             }
         }
     }
 
-    /// Handles server error responses - communication with server works and we
-    /// received a valid response, but that response contains an error.
-    fn handle_server_error_response(result: &Packet, state: &Rc<RefCell<State>>) -> bool {
-        match result.header.code {
-            #[rustfmt::skip]
-            MessageClass::Response(r) => match r {
-                // 200 (success codes)
-                ResponseType::Created => return false,
-                ResponseType::Deleted => return false,
-                ResponseType::Valid => return false,
-                ResponseType::Changed => return false,
-                ResponseType::Content => return false,
-                ResponseType::Continue => return false,
-
-                // 400 codes
-                ResponseType::BadRequest => error!("server error: Bad request"),
-                ResponseType::Unauthorized => error!("server error: Unauthorized"),
-                ResponseType::BadOption => error!("server error: Bad option"),
-                ResponseType::Forbidden => error!("server error: Forbidden"),
-                ResponseType::NotFound => error!("server error: Not found"),
-                ResponseType::MethodNotAllowed => error!("server error: Method not allowed"),
-                ResponseType::NotAcceptable => error!("server error: Not acceptable"),
-                ResponseType::Conflict => error!("server error: Conflict"),
-                ResponseType::PreconditionFailed => error!("server error: Precondition failed"),
-                ResponseType::RequestEntityTooLarge => error!("server error: RequestEntityTooLarge"),
-                ResponseType::UnsupportedContentFormat => error!("server error: Unsupported content format"),
-                ResponseType::RequestEntityIncomplete => error!("server error: Request entity incomplete"),
-                ResponseType::UnprocessableEntity => error!("server error: Unprocessable entity"),
-                ResponseType::TooManyRequests => error!("server error: Too many requests"),
-                // 500 codes
-                ResponseType::InternalServerError => error!("server error: Internal server error"),
-                ResponseType::NotImplemented => error!("server error: Not implemented"),
-                ResponseType::BadGateway => error!("server error: Bad gateway"),
-                ResponseType::ServiceUnavailable => error!("server error: Service unavailable"),
-                ResponseType::GatewayTimeout => error!("server error: Gateway timeout"),
-                ResponseType::ProxyingNotSupported => error!("server error: Proxying not supported"),
-                ResponseType::HopLimitReached => error!("server error: Hop limit Reached"),
-
-                ResponseType::UnKnown => error!("unknown server error"),
-            },
-            // CoapClient revokes any packets that are not response packet
-            _ => unreachable!("This packet type should be handled by CoapClient"),
-        }
-
-        let state = &*state;
-        let state = &mut *state.borrow_mut();
-        match state {
-            State::Init { .. } => {
-                error!("Retrying in 5s ...");
-                state.error();
-            }
-            State::RequestEkCert { .. } => {
-                error!("Failed to request EK certificate, retrying in 5s");
-                state.error();
-            }
-            State::RequestAik { .. } => {
-                error!("Failed to request AIK key, retrying in 5s");
-                state.error();
-            }
-            State::VerifyAikStage2 { .. } => {
-                error!("Failed to send challenge, retrying in 5s");
-                state.error();
-            }
-            State::RequestMetadata { .. } => {
-                error!("Failed to request metadata, retrying in 5s");
-                state.error();
-            }
-            State::RequestRim { .. } => {
-                error!("Failed to request RIM, retrying in 5s");
-                state.error();
-            }
-            // We don't send any requests during these states so we shouldn't
-            // get responses.
-            State::InitDataReceived { .. }
-            | State::Idle { .. }
-            | State::VerifyEkCertificate { .. }
-            | State::VerifyMetadata { .. }
-            | State::VerifyAikStage1 { .. }
-            | State::LoadAik { .. }
-            | State::VerifyStoreRim { .. }
-            | State::Done => {
-                unreachable!()
-            }
-        }
-
-        true
-    }
-
-    fn handle_server_response(result: Packet, state: Rc<RefCell<State>>) {
-        if Self::handle_server_error_response(&result, &state) {
+    fn handle_server_response(result: Packet, state: &mut State) {
+        if handle_server_error_response(&result).is_err() {
+            error!(
+                "Failed to {}, server returned error {}, retrying in 5s",
+                state, result.header.code
+            );
+            state.error();
             return;
         }
-
-        let state = &*state;
-        let state = &mut *state.borrow_mut();
 
         match state {
             State::Init { .. } => {
@@ -652,67 +551,6 @@ impl<'a> FobnailClient<'a> {
 
             info!("Wrote {}", path_str);
             Ok(())
-        }
-    }
-
-    fn verify_ek_certificate<T>(
-        certmgr: &CertMgr,
-        cert: &X509Certificate,
-        trussed: &mut T,
-    ) -> crate::certmgr::Result<()>
-    where
-        T: trussed::client::FilesystemClient + trussed::client::Sha256,
-    {
-        info!("X.509 version {}", cert.version());
-        let issuer = cert.issuer()?;
-        info!("Issuer: {}", issuer);
-        let subject = cert.subject()?;
-        info!("Subject: {}", subject);
-        let key = cert.key()?;
-        info!("Key: {}", key);
-
-        certmgr.verify(trussed, cert)?;
-
-        Ok(())
-    }
-
-    fn prepare_aik_challenge<T>(
-        trussed: &mut T,
-        loaded_key_name: tpm::mu::LoadedKeyName,
-        ek_cert: &X509Certificate,
-    ) -> Result<
-        (
-            trussed::types::Bytes<{ trussed::config::MAX_MESSAGE_LENGTH }>,
-            Vec<u8>,
-            Vec<u8>,
-        ),
-        (),
-    >
-    where
-        T: trussed::client::CryptoClient + trussed::client::Sha256 + trussed::client::Aes256Cbc,
-    {
-        let RandomBytes { bytes: secret } = trussed::try_syscall!(trussed.random_bytes(32))
-            .map_err(|e| {
-                error!("Failed to generate secret: {:?}", e);
-            })?;
-
-        match ek_cert.key().map_err(|e| {
-            error!("Failed to extract EK public key: {}", e);
-        })? {
-            crate::certmgr::Key::Rsa { n, e } => {
-                let ek_key = RsaKey::load(n, e)?;
-
-                let (id_object, encrypted_secret) = tpm::make_credential_rsa(
-                    trussed,
-                    loaded_key_name,
-                    &ek_key,
-                    16,
-                    secret.as_slice(),
-                )
-                .unwrap();
-
-                Ok((secret, id_object, encrypted_secret))
-            }
         }
     }
 
