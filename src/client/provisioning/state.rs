@@ -1,6 +1,6 @@
-use alloc::rc::Rc;
-use alloc::vec::Vec;
+use alloc::{rc::Rc, vec::Vec};
 use core::fmt;
+use pal::timer::get_time_ms;
 
 use crate::certmgr::X509Certificate;
 
@@ -43,7 +43,7 @@ pub enum State<'a> {
     /// stored in memory then verification succeeds.
     VerifyAikStage2 {
         request_pending: bool,
-        secret: trussed::types::Bytes<{ trussed::config::MAX_MESSAGE_LENGTH }>,
+        secret: Vec<u8>,
         id_object: Vec<u8>,
         encrypted_secret: Vec<u8>,
         aik: Vec<u8>,
@@ -83,6 +83,24 @@ pub enum State<'a> {
 
     /// Idle state with optional timeout. After timeout resets into Init state.
     Idle { timeout: Option<u64> },
+
+    /// Provisioning is complete.
+    Done,
+}
+
+impl State<'_> {
+    /// Transition into error state.
+    pub fn error(&mut self) {
+        *self = Self::Idle {
+            timeout: Some(get_time_ms() as u64 + 5000),
+        }
+    }
+
+    /// Transition into complete state. In this state client becomes permanently
+    /// idle.
+    pub fn done(&mut self) {
+        *self = Self::Done
+    }
 }
 
 impl Default for State<'_> {
@@ -109,6 +127,7 @@ impl fmt::Display for State<'_> {
             Self::RequestRim { .. } => write!(f, "request RIM"),
             Self::VerifyStoreRim { .. } => write!(f, "verify RIM"),
             Self::Idle { .. } => write!(f, "idle"),
+            Self::Done => write!(f, "done"),
         }
     }
 }

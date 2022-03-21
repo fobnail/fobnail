@@ -3,9 +3,10 @@ use hmac::{Mac, NewMac};
 use rsa::PublicKey as _;
 use trussed::api::reply::RandomBytes;
 
-use super::{crypto::RsaKey, FobnailClient};
+use super::crypto::RsaKey;
 
 mod aes;
+pub mod aik;
 #[cfg(test)]
 mod fake_rng;
 mod kdf;
@@ -52,114 +53,112 @@ impl core::fmt::Display for HexFormat<'_> {
     }
 }
 
-impl FobnailClient<'_> {
-    pub fn make_credential_rsa<T>(
-        trussed: &mut T,
-        loaded_key_name: mu::LoadedKeyName,
-        ek_key: &RsaKey,
-        sym_block_size: usize,
-        secret: &[u8],
-    ) -> Result<(Vec<u8>, Vec<u8>), ()>
-    where
-        T: trussed::client::CryptoClient + trussed::client::Sha256 + trussed::client::Aes256Cbc,
-    {
-        // The seed length should match the keysize used by the EKs symmetric cipher.
-        // For typical RSA EKs, this will be 128 bits (16 bytes).
-        // Spec: TCG 2.0 EK Credential Profile revision 14, section 2.1.5.1.
-        let RandomBytes { bytes: seed } =
-            trussed::try_syscall!(trussed.random_bytes(sym_block_size)).map_err(|e| {
-                error!("Failed to generate seed: {:?}", e);
-                ()
-            })?;
+pub fn make_credential_rsa<T>(
+    trussed: &mut T,
+    loaded_key_name: mu::LoadedKeyName,
+    ek_key: &RsaKey,
+    sym_block_size: usize,
+    secret: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), ()>
+where
+    T: trussed::client::CryptoClient + trussed::client::Sha256 + trussed::client::Aes256Cbc,
+{
+    // The seed length should match the keysize used by the EKs symmetric cipher.
+    // For typical RSA EKs, this will be 128 bits (16 bytes).
+    // Spec: TCG 2.0 EK Credential Profile revision 14, section 2.1.5.1.
+    let RandomBytes { bytes: seed } = trussed::try_syscall!(trussed.random_bytes(sym_block_size))
+        .map_err(|e| {
+        error!("Failed to generate seed: {:?}", e);
+        ()
+    })?;
 
-        Self::make_credential_rsa_internal(
-            &mut TrussedRng(trussed),
-            loaded_key_name,
-            ek_key,
-            secret,
-            &seed,
-        )
-    }
+    make_credential_rsa_internal(
+        &mut TrussedRng(trussed),
+        loaded_key_name,
+        ek_key,
+        secret,
+        &seed,
+    )
+}
 
-    fn make_credential_rsa_internal<R>(
-        rng: &mut R,
-        loaded_key_name: mu::LoadedKeyName,
-        ek_key: &RsaKey,
-        secret: &[u8],
-        seed: &[u8],
-    ) -> Result<(Vec<u8>, Vec<u8>), ()>
-    where
-        R: rand_core::RngCore,
-    {
-        match loaded_key_name.algorithm() {
-            mu::Algorithm::Sha256 => {
-                // FIXME: should use Trussed for SHA256
-                // Trussed does support SHA256 but it is not easy to integrate
-                // with RSA library, or even impossible because Trussed
-                // requires a single, continuous memory buffer to hash, ie.
-                // there is no update() method
-                let padding =
-                    rsa::PaddingScheme::new_oaep_with_label::<sha2::Sha256, _>("IDENTITY\x00");
-                let encrypted_secret = ek_key.inner.encrypt(rng, padding, &seed).unwrap();
+fn make_credential_rsa_internal<R>(
+    rng: &mut R,
+    loaded_key_name: mu::LoadedKeyName,
+    ek_key: &RsaKey,
+    secret: &[u8],
+    seed: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), ()>
+where
+    R: rand_core::RngCore,
+{
+    match loaded_key_name.algorithm() {
+        mu::Algorithm::Sha256 => {
+            // FIXME: should use Trussed for SHA256
+            // Trussed does support SHA256 but it is not easy to integrate
+            // with RSA library, or even impossible because Trussed
+            // requires a single, continuous memory buffer to hash, ie.
+            // there is no update() method
+            let padding =
+                rsa::PaddingScheme::new_oaep_with_label::<sha2::Sha256, _>("IDENTITY\x00");
+            let encrypted_secret = ek_key.inner.encrypt(rng, padding, &seed).unwrap();
 
-                // Generate the encrypted credential by convolving the seed with the digest of
-                // the AIK, and using the result as the key to encrypt the secret.
-                // See section 24.4 of TPM 2.0 specification, part 1.
-                let aes_key = kdf::kdf_a(
-                    loaded_key_name.algorithm(),
-                    &seed,
-                    "STORAGE",
-                    loaded_key_name.raw_data(),
-                    &[],
-                    (seed.len() * 8).try_into().unwrap(),
-                );
+            // Generate the encrypted credential by convolving the seed with the digest of
+            // the AIK, and using the result as the key to encrypt the secret.
+            // See section 24.4 of TPM 2.0 specification, part 1.
+            let aes_key = kdf::kdf_a(
+                loaded_key_name.algorithm(),
+                &seed,
+                "STORAGE",
+                loaded_key_name.raw_data(),
+                &[],
+                (seed.len() * 8).try_into().unwrap(),
+            );
 
-                // Prepend a 2 byte size field to secret
-                let cv = mu::ByteArray::new(&secret).encode();
+            // Prepend a 2 byte size field to secret
+            let cv = mu::ByteArray::new(&secret).encode();
 
-                // FIXME: Once again we cannot use Trussed ...
-                // Trussed implements AES CBC 256 but we need AES CFB 128.
-                let mut enc_identity = vec![0u8; cv.len()];
+            // FIXME: Once again we cannot use Trussed ...
+            // Trussed implements AES CBC 256 but we need AES CFB 128.
+            let mut enc_identity = vec![0u8; cv.len()];
 
-                aes::aes128_cfb_encrypt(
-                    &aes_key,
-                    // Use null IV
-                    &[0u8; 16],
-                    &cv,
-                    &mut enc_identity,
-                );
+            aes::aes128_cfb_encrypt(
+                &aes_key,
+                // Use null IV
+                &[0u8; 16],
+                &cv,
+                &mut enc_identity,
+            );
 
-                // Generate the integrity HMAC, which is used to protect the integrity of the
-                // encrypted structure.
-                // See section 24.5 of the TPM specification revision 2 part 1.
-                let mac_key = kdf::kdf_a(
-                    loaded_key_name.algorithm(),
-                    &seed,
-                    "INTEGRITY",
-                    &[],
-                    &[],
-                    (loaded_key_name.hash().len() * 8).try_into().unwrap(),
-                );
+            // Generate the integrity HMAC, which is used to protect the integrity of the
+            // encrypted structure.
+            // See section 24.5 of the TPM specification revision 2 part 1.
+            let mac_key = kdf::kdf_a(
+                loaded_key_name.algorithm(),
+                &seed,
+                "INTEGRITY",
+                &[],
+                &[],
+                (loaded_key_name.hash().len() * 8).try_into().unwrap(),
+            );
 
-                let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&mac_key).unwrap();
-                mac.update(&enc_identity);
-                mac.update(loaded_key_name.raw_data());
+            let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&mac_key).unwrap();
+            mac.update(&enc_identity);
+            mac.update(loaded_key_name.raw_data());
 
-                let integrity_hmac = mac.finalize().into_bytes();
+            let integrity_hmac = mac.finalize().into_bytes();
 
-                // Construct ID object
-                let id_object = mu::IDObject::new(&integrity_hmac, &enc_identity).encode();
-                let encrypted_secret_with_size = mu::ByteArray::new(&encrypted_secret).encode();
+            // Construct ID object
+            let id_object = mu::IDObject::new(&integrity_hmac, &enc_identity).encode();
+            let encrypted_secret_with_size = mu::ByteArray::new(&encrypted_secret).encode();
 
-                Ok((id_object, encrypted_secret_with_size))
-            }
-            _ => {
-                error!(
-                    "Algorithm {:?} is unsupported or invalid",
-                    loaded_key_name.algorithm()
-                );
-                return Err(());
-            }
+            Ok((id_object, encrypted_secret_with_size))
+        }
+        _ => {
+            error!(
+                "Algorithm {:?} is unsupported or invalid",
+                loaded_key_name.algorithm()
+            );
+            return Err(());
         }
     }
 }
@@ -169,7 +168,7 @@ mod tests {
     use alloc::vec::Vec;
     use rand_core::RngCore;
 
-    use super::{mu, FobnailClient};
+    use super::{make_credential_rsa_internal, mu};
     use crate::client::crypto::RsaKey;
 
     #[test]
@@ -245,8 +244,7 @@ mod tests {
         rng.fill_bytes(&mut seed[..]);
 
         let (id_object, credential) =
-            FobnailClient::make_credential_rsa_internal(&mut rng, lkn, &ek_key, &secret, &seed)
-                .unwrap();
+            make_credential_rsa_internal(&mut rng, lkn, &ek_key, &secret, &seed).unwrap();
 
         let mut activation_blob = Vec::with_capacity(id_object.len() + credential.len());
         activation_blob.extend_from_slice(&id_object);
