@@ -615,29 +615,29 @@ impl<'a> FobnailClient<'a> {
 
         if rim.sha1.pcrs != 0 {
             info!("sha1:");
-            for pcr in rim.sha1.pcr.iter() {
-                info!("  {}", HexFormatter(pcr));
+            for (i, pcr) in &rim.sha1 {
+                info!("  pcr{:02}: {}", i, HexFormatter(pcr));
             }
         }
 
         if rim.sha256.pcrs != 0 {
             info!("sha256:");
-            for pcr in rim.sha256.pcr.iter() {
-                info!("  {}", HexFormatter(pcr));
+            for (i, pcr) in &rim.sha256 {
+                info!("  pcr{:02}: {}", i, HexFormatter(pcr));
             }
         }
 
         if rim.sha384.pcrs != 0 {
             info!("sha384:");
-            for pcr in rim.sha384.pcr.iter() {
-                info!("  {}", HexFormatter(pcr));
+            for (i, pcr) in &rim.sha384 {
+                info!("  pcr{:02}: {}", i, HexFormatter(pcr));
             }
         }
 
         Ok((rim, raw_rim))
     }
 
-    fn do_verify_pcrs(pcrs: &proto::Pcrs, expected_pcr_len: usize) -> Result<(), ()> {
+    fn do_verify_pcrs(pcrs: &proto::PcrBank, expected_pcr_len: usize) -> Result<(), ()> {
         // pcrs is a bitmask representing which PCRs are present and which are
         // not.
         let n1 = pcrs.pcrs.count_ones() as usize;

@@ -197,21 +197,65 @@ where
 }
 
 #[derive(Debug, Deserialize, Default)]
-pub struct Pcrs<'a> {
+pub struct PcrBank<'a> {
     pub pcrs: u32,
     #[serde(borrow)]
     pub pcr: ArrayOf<'a, &'a serde_bytes::Bytes>,
+}
+
+impl<'a> IntoIterator for &'a PcrBank<'a> {
+    type Item = <Self::IntoIter as Iterator>::Item;
+    type IntoIter = PcrIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PcrIterator {
+            bank: self,
+            pcr_index: 0,
+            pcr_offset: 0,
+            bitmap: self.pcrs,
+        }
+    }
+}
+
+pub struct PcrIterator<'a> {
+    bank: &'a PcrBank<'a>,
+    pcr_index: u32,
+    pcr_offset: u32,
+    bitmap: u32,
+}
+
+impl<'a> Iterator for PcrIterator<'a> {
+    type Item = (u32, &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(&pcr) = self.bank.pcr.inner.get(self.pcr_offset as usize) {
+            self.pcr_offset += 1;
+
+            while self.bitmap & 1 != 1 {
+                assert_ne!(self.bitmap, 0);
+                self.pcr_index += 1;
+                self.bitmap >>= 1;
+            }
+            self.bitmap >>= 1;
+            let index = self.pcr_index;
+            self.pcr_index += 1;
+
+            Some((index, &pcr[..]))
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Rim<'a> {
     pub update_ctr: u32,
     #[serde(borrow, default)]
-    pub sha1: Pcrs<'a>,
+    pub sha1: PcrBank<'a>,
     #[serde(borrow, default)]
-    pub sha256: Pcrs<'a>,
+    pub sha256: PcrBank<'a>,
     #[serde(borrow, default)]
-    pub sha384: Pcrs<'a>,
+    pub sha384: PcrBank<'a>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
