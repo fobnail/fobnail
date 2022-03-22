@@ -1,6 +1,6 @@
 use core::cell::RefCell;
 
-use alloc::rc::Rc;
+use alloc::{rc::Rc, vec::Vec};
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
@@ -11,7 +11,7 @@ use trussed::{
 
 use super::{
     crypto, proto, signing,
-    util::{format_hex, handle_server_error_response},
+    util::{format_hex, handle_server_error_response, HexFormatter},
 };
 use crate::coap::{CoapClient, Error};
 use state::State;
@@ -133,7 +133,34 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             }
-            _ => unimplemented!(),
+            _ => {
+                // We already matched all possible states in handle_response()
+                // and we should never reach here
+                unreachable!()
+            }
+        }
+    }
+
+    fn load_rim<T>(trussed: &mut T, metadata_hash: &[u8]) -> Result<Vec<u8>, ()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        let path_str = format!("/meta/{}", HexFormatter(metadata_hash));
+        let path = PathBuf::from(path_str.as_str());
+        match trussed::try_syscall!(trussed.read_file(Location::Internal, path)) {
+            Ok(ReadFile { data }) => {
+                let mut data_copy = Vec::new();
+                data_copy.extend_from_slice(&data);
+                Ok(data_copy)
+            }
+            Err(trussed::Error::FilesystemReadFailure) => {
+                error!("Failed to read {} (is the platform provisioned?)", path_str);
+                Err(())
+            }
+            Err(e) => {
+                error!("Unknown file system error: {:?}", e);
+                Err(())
+            }
         }
     }
 
