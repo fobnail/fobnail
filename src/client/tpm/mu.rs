@@ -213,8 +213,8 @@ impl<'a> IDObject<'a> {
         id_object.extend_from_slice(&u16::to_be_bytes(
             self.integrity_hmac.len().try_into().unwrap(),
         ));
-        id_object.extend_from_slice(&self.integrity_hmac);
-        id_object.extend_from_slice(&self.enc_identity);
+        id_object.extend_from_slice(self.integrity_hmac);
+        id_object.extend_from_slice(self.enc_identity);
         assert_eq!(id_object.len(), id_object_size);
         id_object
     }
@@ -240,7 +240,7 @@ impl<'a> Public<'a> {
         let hash_algorithm = Algorithm::new_hash(decode!(cursor, data, u16))?;
         let object_attributes = decode!(cursor, data, u32);
         let auth_policy = decode!(cursor, data, [u8]);
-        ensure!(auth_policy.len() == 0, "authPolicy is not supported");
+        ensure!(auth_policy.is_empty(), "authPolicy is not supported");
 
         // Decode TPMU_PUBLIC_PARMS, contents depend on algorithm type
         match algorithm {
@@ -289,7 +289,7 @@ impl<'a> Public<'a> {
             }
             _ => {
                 error!("Unsupported asymmetric algorithm {:?}", algorithm);
-                return Err(());
+                Err(())
             }
         }
     }

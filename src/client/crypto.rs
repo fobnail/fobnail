@@ -49,7 +49,7 @@ impl<'a> Ed25519Key<'a> {
 
     #[inline]
     pub fn key_id(&self) -> KeyId {
-        self.key_id.clone()
+        self.key_id
     }
 }
 

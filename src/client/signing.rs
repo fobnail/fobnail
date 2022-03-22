@@ -20,7 +20,6 @@ where
 {
     let signed_object = trussed::cbor_deserialize::<SignedObject>(data).map_err(|e| {
         error!("Failed to deserialize signed object (outer): {}", e);
-        ()
     })?;
 
     // We expect SHA256 for RSA and SHA512 for Ed25519
@@ -35,7 +34,7 @@ where
 
             match trussed::try_syscall!(trussed.verify(
                 Mechanism::Ed255,
-                key.key_id().clone(),
+                key.key_id(),
                 signed_object.data,
                 signed_object.signature,
                 SignatureSerialization::Raw

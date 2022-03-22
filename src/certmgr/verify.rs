@@ -24,7 +24,7 @@ impl<T> MaybeOwned<'_, T> {
     pub fn get(&self) -> &T {
         match self {
             Self::Borrowed(inner) => inner,
-            Self::Owned(inner) => &inner,
+            Self::Owned(inner) => inner,
         }
     }
 }
@@ -223,8 +223,7 @@ impl CertMgr {
     fn ca_constraint_check(cert: &X509Certificate) -> (bool, Option<u8>) {
         if let Some(constraints) = cert
             .extensions()
-            .map(|x| x.iter().find(|x| x.extn_id == X509V3_CONSTRAINTS))
-            .flatten()
+            .and_then(|x| x.iter().find(|x| x.extn_id == X509V3_CONSTRAINTS))
         {
             match x509::BasicConstraints::from_der(constraints.extn_value) {
                 Ok(constraints) => {
@@ -342,7 +341,7 @@ impl CertMgr {
                             Err(_) => Ok(false),
                         }
                     }
-                    _ => return Err(Error::CustomStatic("Unsupported hash algorithm")),
+                    _ => Err(Error::CustomStatic("Unsupported hash algorithm")),
                 }
             }
         }
