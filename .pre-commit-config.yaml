@@ -1,0 +1,61 @@
+---
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.1.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/jumanjihouse/pre-commit-hooks
+    rev: 2.1.6
+    hooks:
+      - id: shellcheck
+        args: ["--severity=warning"]
+
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        name: 'fmt: main'
+        args: ['--manifest-path', 'Cargo.toml', '--']
+          # TODO: consider enabling clippy
+          # - id: clippy
+          #   name: 'clippy: main'
+          #   args: ['--manifest-path', 'Cargo.toml', '--', '-D', 'warnings']
+
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        name: 'fmt: pal_nrf'
+        args: ['--manifest-path', 'pal/pal_nrf/Cargo.toml', '--']
+          # TODO: consider enabling clippy
+          # - id: clippy
+          #   name: 'clippy: pal_nrf'
+          #   args: ['--manifest-path', 'pal/pal_nrf/Cargo.toml', '--', '-D', 'warnings']
+
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        name: 'fmt: pal_pc'
+        args: ['--manifest-path', 'pal/pal_pc/Cargo.toml', '--']
+          # TODO: consider enabling clippy
+          # - id: clippy
+          #   name: 'clippy: pal_pc'
+          #   args: ['--manifest-path', 'pal/pal_pc/Cargo.toml', '--', '-D', 'warnings']
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.5.0
+    hooks:
+      - id: typos
+
+# cargo is not supported for now in the pre-commit.ci
+# shellcheck uses docker, which is not supported in the pre-commit.ci
+ci:
+  skip: [fmt, shellcheck]

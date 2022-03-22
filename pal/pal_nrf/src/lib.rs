@@ -76,7 +76,7 @@ pub fn init() {
         TIMER0 = MaybeUninit::new(timer0);
         let timer0 = TIMER0.assume_init_ref();
         // Periodic mode does not automatically clear counter, which causes timer to
-        // fire immediatelly after interrupt handler returns
+        // fire immediately after interrupt handler returns
         timer0.set_oneshot();
         timer0.enable_interrupt();
         timer0.timer_start(Timer::<TIMER0, Periodic>::TICKS_PER_SECOND / 1000 * TIMER0_PERIOD_MS);

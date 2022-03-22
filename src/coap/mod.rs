@@ -45,7 +45,7 @@ struct PendingRequest<'a> {
 }
 
 impl PendingRequest<'_> {
-    /// Notify callback that request has completed, either successfuly or with
+    /// Notify callback that request has completed, either successfully or with
     /// error.
     pub fn complete(self, result: Result<Packet>) {
         let Self { confirmable, .. } = self;

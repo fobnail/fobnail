@@ -37,7 +37,7 @@ impl Display for Error {
             Self::X509Spki(e) => e.fmt(f),
             Self::CustomStatic(e) => e.fmt(f),
             Self::ExceededRecursionLimit => write!(f, "exceeded recursion limit"),
-            Self::IssuerNotFound => write!(f, "no issuer certicate found"),
+            Self::IssuerNotFound => write!(f, "no issuer certificate found"),
             Self::UntrustedSelfSignedCert => write!(f, "untrusted self-signed certificate"),
             Self::UnsupportedCriticalExtension => write!(f, "unsupported critical extension"),
             Self::DoesNotMeetTcgRequirements => {

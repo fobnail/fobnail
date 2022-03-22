@@ -22,7 +22,7 @@ fn cert_from_pem(path: &Path) -> anyhow::Result<Vec<u8>> {
     file.read_to_end(&mut data)?;
 
     let pem =
-        pem::parse(data).context("Failed to parse PEM (is this a PEM-encoded certficate?)")?;
+        pem::parse(data).context("Failed to parse PEM (is this a PEM-encoded certificate?)")?;
 
     Ok(pem.contents)
 }

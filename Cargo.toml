@@ -43,26 +43,8 @@ aes = "0.8"
 
 [profile.dev]
 lto = "thin"
+opt-level = "z"
 
 [profile.dev.package]
-# Trussed dependencies
-trussed = { opt-level = "z" }
-aes = { opt-level = "z" }
-# blake2 = { opt-level = "z" }
-block-modes = { opt-level = "z" }
-chacha20 = { opt-level = "z" }
-chacha20poly1305 = { opt-level = "z" }
-des = { opt-level = "z" }
-hmac = { opt-level = "z" }
-sha-1 = { opt-level = "z" }
-sha2 = { opt-level = "z" }
-
-cosey = { opt-level = "z" }
-delog = { opt-level = "z" }
-cbor-smol = { opt-level = "z" }
-heapless-bytes = { opt-level = "z" }
-interchange = { opt-level = "z" }
-littlefs2 = { opt-level = "z" }
-p256-cortex-m4 = { opt-level = "z" }
-salty = { opt-level = "z" }
-serde-indexed = { opt-level = "z" }
+# FIXME: Littlefs requires strcpy() when optimizations are enabled.
+littlefs2-sys = { opt-level = 0 }

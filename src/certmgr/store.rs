@@ -148,7 +148,7 @@ impl<'a> CertificateIterator<'a> {
     }
 }
 
-/// Checks for presense of forbidden characters (or sequences of characters).
+/// Checks for presence of forbidden characters (or sequences of characters).
 /// This exists to prevent path traversal attacks.
 ///
 /// Return value

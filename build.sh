@@ -61,7 +61,7 @@ if [ "${target}" == "pc" ]; then
     fi
 elif [ "${target}" == "nrf" ]; then
     cargo_target="thumbv7em-none-eabihf"
-    RUSTFLAGS="-C link-arg=-Tpal/pal_nrf/link.x -C linker-plugin-lto"
+    export RUSTFLAGS="-C link-arg=-Tpal/pal_nrf/link.x -C linker-plugin-lto"
     if [ -n "${run}" ]; then
         cargo_command="embed"
     fi
