@@ -240,11 +240,6 @@ impl<'a> FobnailClient<'a> {
                         info!("  Manufacturer : {}", metadata.manufacturer);
                         info!("  Product      : {}", metadata.product_name);
                         info!("  Serial       : {}", metadata.serial_number);
-                        // Changing state will trigger destructor of AIK key,
-                        // removing it from Trussed keystore. Destructor calls
-                        // a closure which borrows trussed client, so we need to
-                        // release current borrow to avoid panic.
-                        drop(trussed);
 
                         // For now we are unable to completely avoid copying
                         // data around because metadata hash goes through a few
