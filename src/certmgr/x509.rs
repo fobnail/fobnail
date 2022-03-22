@@ -114,7 +114,7 @@ impl<'a> X509Certificate<'a> {
                     .tag()
                     .assert_eq(Tag::Null)?;
 
-                let mut decoder = x509::der::Decoder::new(&info.subject_public_key)?;
+                let mut decoder = x509::der::Decoder::new(info.subject_public_key)?;
                 let x = RsaPublicKey::decode(&mut decoder)?;
 
                 let mut exponent_bytes = [0u8; 4];
@@ -279,7 +279,7 @@ fn parse_string<'r>(data: &'r x509::der::asn1::Any) -> Option<&'r str> {
     let s = data
         .utf8_string()
         .map(|x| x.as_str())
-        .or(data.printable_string().map(|x| x.as_str()))
+        .or_else(|_| data.printable_string().map(|x| x.as_str()))
         .ok()?;
     Some(s)
 }

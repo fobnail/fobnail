@@ -62,12 +62,12 @@ where
 }
 
 pub fn load(raw_aik: &[u8]) -> Result<Rc<crypto::Key<'static>>, ()> {
-    let key = mu::Public::decode(&raw_aik)?;
+    let key = mu::Public::decode(raw_aik)?;
 
     match key.key {
         mu::PublicKey::Rsa { exponent, modulus } => match modulus.len() * 8 {
             1024 | 2048 | 4096 | 8192 => {
-                let key = crypto::RsaKey::load(&modulus, exponent)?;
+                let key = crypto::RsaKey::load(modulus, exponent)?;
                 Ok(Rc::new(crypto::Key::Rsa(key)))
             }
 

@@ -72,7 +72,6 @@ where
     let RandomBytes { bytes: seed } = trussed::try_syscall!(trussed.random_bytes(sym_block_size))
         .map_err(|e| {
         error!("Failed to generate seed: {:?}", e);
-        ()
     })?;
 
     make_credential_rsa_internal(
@@ -103,14 +102,14 @@ where
             // there is no update() method
             let padding =
                 rsa::PaddingScheme::new_oaep_with_label::<sha2::Sha256, _>("IDENTITY\x00");
-            let encrypted_secret = ek_key.inner.encrypt(rng, padding, &seed).unwrap();
+            let encrypted_secret = ek_key.inner.encrypt(rng, padding, seed).unwrap();
 
             // Generate the encrypted credential by convolving the seed with the digest of
             // the AIK, and using the result as the key to encrypt the secret.
             // See section 24.4 of TPM 2.0 specification, part 1.
             let aes_key = kdf::kdf_a(
                 loaded_key_name.algorithm(),
-                &seed,
+                seed,
                 "STORAGE",
                 loaded_key_name.raw_data(),
                 &[],
@@ -118,7 +117,7 @@ where
             );
 
             // Prepend a 2 byte size field to secret
-            let cv = mu::ByteArray::new(&secret).encode();
+            let cv = mu::ByteArray::new(secret).encode();
 
             // FIXME: Once again we cannot use Trussed ...
             // Trussed implements AES CBC 256 but we need AES CFB 128.
@@ -137,7 +136,7 @@ where
             // See section 24.5 of the TPM specification revision 2 part 1.
             let mac_key = kdf::kdf_a(
                 loaded_key_name.algorithm(),
-                &seed,
+                seed,
                 "INTEGRITY",
                 &[],
                 &[],
@@ -161,11 +160,13 @@ where
                 "Algorithm {:?} is unsupported or invalid",
                 loaded_key_name.algorithm()
             );
-            return Err(());
+            Err(())
         }
     }
 }
 
+// Return type is not that complex. Eventually we may use struct.
+#[allow(clippy::type_complexity)]
 pub fn prepare_aik_challenge<T>(
     trussed: &mut T,
     loaded_key_name: mu::LoadedKeyName,

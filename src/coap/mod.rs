@@ -182,11 +182,10 @@ impl<'a> CoapClient<'a> {
                                 | MessageType::NonConfirmable,
                                 MessageClass::Response(_),
                             ) => {
-                                if let Some(token) = TryInto::<[u8; size_of::<Token>()]>::try_into(
+                                if let Ok(token) = TryInto::<[u8; size_of::<Token>()]>::try_into(
                                     packet.get_token().as_slice(),
                                 )
-                                .map(|x| Token::from_ne_bytes(x))
-                                .ok()
+                                .map(Token::from_ne_bytes)
                                 {
                                     if let Some(request) = self.wait_queue.remove(&token) {
                                         if let Some(original_token) = request.linked_request {
@@ -211,24 +210,19 @@ impl<'a> CoapClient<'a> {
                                                     );
                                                 }
                                             }
-                                        } else {
-                                            if let Some(request) =
-                                                self.process_response(request, packet)
+                                        } else if let Some(request) =
+                                            self.process_response(request, packet)
+                                        {
+                                            // We are still waiting for more blocks to come. Request for the next
+                                            // block has been queued already, we need only to insert original
+                                            // request into the proper queue.
+                                            if self.blockwise_queue.insert(token, request).is_some()
                                             {
-                                                // We are still waiting for more blocks to come. Request for the next
-                                                // block has been queued already, we need only to insert original
-                                                // request into the proper queue.
-                                                if self
-                                                    .blockwise_queue
-                                                    .insert(token, request)
-                                                    .is_some()
-                                                {
-                                                    // This should never happen
-                                                    panic!(
+                                                // This should never happen
+                                                panic!(
                                                         "Duplicated token ({}) in CoAP block-wise queue",
                                                         token
                                                     );
-                                                }
                                             }
                                         }
                                     }
@@ -371,7 +365,7 @@ impl<'a> CoapClient<'a> {
                 CoapOption::Block2 => {
                     let mut buffer = Vec::new();
                     for x in data.iter() {
-                        buffer.extend_from_slice(&x);
+                        buffer.extend_from_slice(x);
                     }
 
                     if let Some((block_size, block_number, more_blocks)) =
@@ -385,12 +379,10 @@ impl<'a> CoapClient<'a> {
                                 confirmable.next_block, block_number
                             );
                             action = Action::Fail;
+                        } else if more_blocks {
+                            action = Action::RequestNextBlock { block_size };
                         } else {
-                            if more_blocks {
-                                action = Action::RequestNextBlock { block_size };
-                            } else {
-                                action = Action::Complete;
-                            }
+                            action = Action::Complete;
                         }
                     } else {
                         error!("Could not decode BLOCK2 option");
@@ -478,7 +470,7 @@ impl<'a> CoapClient<'a> {
     }
 
     fn decode_block12_option(data: &[u8]) -> Option<(u32, u32, bool)> {
-        if data.len() == 0 {
+        if data.is_empty() {
             return None;
         }
 

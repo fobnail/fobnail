@@ -8,7 +8,7 @@ type Aes128CfbEncrypt = Encryptor<Aes128>;
 
 pub fn aes128_cfb_encrypt(key: &[u8], iv: &[u8], data: &[u8], out: &mut [u8]) {
     let encryptor = Aes128CfbEncrypt::new(key.into(), iv.into());
-    encryptor.encrypt_b2b(&data, out).unwrap();
+    encryptor.encrypt_b2b(data, out).unwrap();
 }
 
 #[cfg(test)]

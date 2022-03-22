@@ -35,18 +35,18 @@ impl CertMgr {
                             path_copy,
                             ATTRIBUTE_CERTIFICATE_FLAGS,
                         )) {
-                            Ok(ReadAttribute { data }) => match data {
-                                Some(attr) => {
+                            Ok(ReadAttribute { data }) => {
+                                if let Some(attr) = data {
                                     if let Some(&flags) = attr.first() {
                                         if flags & CERTIFICATE_FLAG_TRUSTED != 0 {
                                             cert.is_trusted = true;
                                         }
                                     }
-                                }
-                                None => {
+                                } else {
                                     // Assume defaults
                                 }
-                            },
+                            }
+
                             Err(_) => {
                                 warn!("Failed to read certificate flags");
                             }
