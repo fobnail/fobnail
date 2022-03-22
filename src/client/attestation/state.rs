@@ -1,10 +1,11 @@
-use alloc::vec::Vec;
+use alloc::{rc::Rc, vec::Vec};
 use core::fmt;
 
+use super::crypto::Key;
 use crate::certmgr::X509Certificate;
 use pal::timer::get_time_ms;
 
-pub enum State {
+pub enum State<'a> {
     /// Send request to obtain EK certificate
     RequestEkCert { request_pending: bool },
 
@@ -44,11 +45,24 @@ pub enum State {
     /// Parse and load AIK key.
     LoadAik { raw_aik: Vec<u8> },
 
+    /// Send metadata request and wait for response.
+    RequestMetadata {
+        aik_pubkey: Rc<Key<'a>>,
+        request_pending: bool,
+    },
+
+    /// Verify whether metadata has been properly signed with the Attestation
+    /// Identity Key. Check if attester is provisioned and load its RIMs.
+    VerifyMetadata {
+        aik_pubkey: Rc<Key<'a>>,
+        metadata: Vec<u8>,
+    },
+
     /// Idle state with optional timeout. After timeout resets into Init state.
     Idle { timeout: Option<u64> },
 }
 
-impl State {
+impl State<'_> {
     /// Transition into error state.
     pub fn error(&mut self) {
         *self = Self::Idle {
@@ -57,7 +71,7 @@ impl State {
     }
 }
 
-impl Default for State {
+impl Default for State<'_> {
     fn default() -> Self {
         Self::RequestEkCert {
             request_pending: false,
@@ -65,7 +79,7 @@ impl Default for State {
     }
 }
 
-impl fmt::Display for State {
+impl fmt::Display for State<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RequestEkCert { .. } => write!(f, "request EK certificate"),
@@ -74,6 +88,8 @@ impl fmt::Display for State {
             Self::VerifyAikStage1 { .. } => write!(f, "verify AIK (stage 1)"),
             Self::VerifyAikStage2 { .. } => write!(f, "verify AIK (stage 2)"),
             Self::LoadAik { .. } => write!(f, "load AIK"),
+            Self::RequestMetadata { .. } => write!(f, "request metadata"),
+            Self::VerifyMetadata { .. } => write!(f, "verify metadata"),
             Self::Idle { .. } => write!(f, "idle"),
         }
     }

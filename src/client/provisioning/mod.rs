@@ -232,7 +232,11 @@ impl<'a> FobnailClient<'a> {
             } => {
                 let mut trussed = self.trussed.borrow_mut();
 
-                match Self::do_verify_metadata_signature(*trussed, metadata, aik_pubkey) {
+                match signing::decode_signed_object::<_, proto::Metadata>(
+                    *trussed, metadata, aik_pubkey,
+                )
+                .map(|(meta, _, hash)| (meta, hash))
+                {
                     Ok((metadata, hash)) => {
                         info!("Received attester metadata:");
                         info!("  Version      : {}", metadata.version);
@@ -466,19 +470,6 @@ impl<'a> FobnailClient<'a> {
         }
     }
 
-    /// Verify cryptographic signature of metadata.
-    fn do_verify_metadata_signature<T>(
-        trussed: &mut T,
-        metadata: &[u8],
-        key: &crypto::Key,
-    ) -> Result<(proto::Metadata, trussed::Bytes<128>), ()>
-    where
-        T: trussed::client::CryptoClient,
-    {
-        signing::decode_signed_object::<_, proto::Metadata>(trussed, metadata, key)
-            .map(|(meta, _, hash)| (meta, hash))
-    }
-
     /// Verify correctness of the metadata itself.
     fn do_verify_metadata(metadata: &proto::Metadata) -> bool {
         if metadata.version != proto::CURRENT_VERSION {
@@ -515,8 +506,8 @@ impl<'a> FobnailClient<'a> {
             PathBuf::from(metadata_hash.as_str())
         ));
         if let Some(path) = locate.path.take() {
-            // File already exists, compare contents of with the old RIM and
-            // current RIM, if these are the same avoid writing to flash.
+            // File already exists, compare contents of the old RIM and current
+            // RIM, if these are the same avoid writing to flash.
             let r = trussed::syscall!(trussed.read_file(Location::Internal, path));
             if r.data == rim {
                 debug!("{} didn't change since last write", path_str);

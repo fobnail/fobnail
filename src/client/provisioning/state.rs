@@ -58,8 +58,8 @@ pub enum State<'a> {
         request_pending: bool,
     },
 
-    /// Verify whether metadata has been properly with the Attestation Identity
-    /// Key.
+    /// Verify whether metadata has been properly signed with the Attestation
+    /// Identity Key.
     VerifyMetadata {
         aik_pubkey: Rc<Key<'a>>,
         metadata: Vec<u8>,

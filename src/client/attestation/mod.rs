@@ -1,11 +1,18 @@
 use core::cell::RefCell;
 
-use alloc::rc::Rc;
+use alloc::{rc::Rc, vec::Vec};
 use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
+use trussed::{
+    api::reply::ReadFile,
+    types::{Location, PathBuf},
+};
 
-use super::{proto, tpm, util::handle_server_error_response};
+use super::{
+    crypto, proto, signing, tpm,
+    util::{handle_server_error_response, HexFormatter},
+};
 use crate::{
     certmgr::CertMgr,
     coap::{CoapClient, Error},
@@ -16,7 +23,7 @@ mod state;
 
 /// Client which speaks to attester in order to perform platform attestation.
 pub struct FobnailClient<'a> {
-    state: Rc<RefCell<State>>,
+    state: Rc<RefCell<State<'a>>>,
     coap_client: CoapClient<'a>,
     trussed: RefCell<&'a mut trussed::ClientImplementation<pal::trussed::Syscall>>,
     certmgr: CertMgr,
@@ -154,14 +161,62 @@ impl<'a> FobnailClient<'a> {
                 }
             }
             State::LoadAik { raw_aik } => match tpm::aik::load(raw_aik) {
-                Ok(_aik) => {
-                    unimplemented!()
+                Ok(aik) => {
+                    *state = State::RequestMetadata {
+                        aik_pubkey: aik,
+                        request_pending: false,
+                    }
                 }
                 Err(()) => {
                     error!("Failed to load AIK");
                     state.error();
                 }
             },
+            State::RequestMetadata {
+                request_pending, ..
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+                    let mut request = coap_lite::CoapRequest::new();
+                    request.set_path("/metadata");
+                    request.set_method(RequestType::Fetch);
+                    let state = Rc::clone(&self.state);
+                    self.coap_client
+                        .queue_request(request, move |result| Self::handle_response(result, state));
+                }
+            }
+            State::VerifyMetadata {
+                aik_pubkey,
+                metadata,
+            } => {
+                let mut trussed = self.trussed.borrow_mut();
+
+                match signing::decode_signed_object::<_, proto::Metadata>(
+                    *trussed, metadata, aik_pubkey,
+                )
+                .map(|(meta, _, hash)| (meta, hash))
+                {
+                    Ok((metadata, hash)) => {
+                        info!("Attesting platform:");
+                        info!("  Manufacturer : {}", metadata.manufacturer);
+                        info!("  Product      : {}", metadata.product_name);
+                        info!("  Serial       : {}", metadata.serial_number);
+                        info!("  MAC          : {}", metadata.mac);
+
+                        match Self::load_rim(*trussed, &hash) {
+                            Ok(_rim) => {
+                                error!("Attestation is not implemented");
+                                state.error();
+                            }
+                            Err(()) => state.error(),
+                        }
+                    }
+                    Err(()) => {
+                        error!("Metadata invalid");
+                        state.error();
+                    }
+                }
+            }
         }
     }
 
@@ -171,7 +226,8 @@ impl<'a> FobnailClient<'a> {
         match state {
             State::RequestEkCert { .. }
             | State::RequestAik { .. }
-            | State::VerifyAikStage2 { .. } => match result {
+            | State::VerifyAikStage2 { .. }
+            | State::RequestMetadata { .. } => match result {
                 Ok(resp) => {
                     Self::handle_server_response(resp, state);
                 }
@@ -186,7 +242,8 @@ impl<'a> FobnailClient<'a> {
             State::VerifyEkCertificate { .. }
             | State::VerifyAikStage1 { .. }
             | State::Idle { .. }
-            | State::LoadAik { .. } => {
+            | State::LoadAik { .. }
+            | State::VerifyMetadata { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -249,7 +306,45 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             }
-            _ => unimplemented!(),
+            State::RequestMetadata { aik_pubkey, .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::VerifyMetadata {
+                        metadata: result.payload,
+                        aik_pubkey: Rc::clone(aik_pubkey),
+                    }
+                } else {
+                    error!("Server gave invalid response to metadata request");
+                    state.error();
+                }
+            }
+            _ => {
+                // We already matched all possible states in handle_response()
+                // and we should never reach here
+                unreachable!()
+            }
+        }
+    }
+
+    fn load_rim<T>(trussed: &mut T, metadata_hash: &[u8]) -> Result<Vec<u8>, ()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        let path_str = format!("/meta/{}", HexFormatter(metadata_hash));
+        let path = PathBuf::from(path_str.as_str());
+        match trussed::try_syscall!(trussed.read_file(Location::Internal, path)) {
+            Ok(ReadFile { data }) => {
+                let mut data_copy = Vec::new();
+                data_copy.extend_from_slice(&data);
+                Ok(data_copy)
+            }
+            Err(trussed::Error::FilesystemReadFailure) => {
+                error!("Failed to read {} (is the platform provisioned?)", path_str);
+                Err(())
+            }
+            Err(e) => {
+                error!("Unknown file system error: {:?}", e);
+                Err(())
+            }
         }
     }
 }
