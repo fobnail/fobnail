@@ -51,6 +51,33 @@ impl<'a> FobnailClient<'a> {
     pub fn poll(&mut self, socket: SocketRef<'_, UdpSocket>) {
         self.coap_client.poll(socket);
 
+        macro_rules! coap_request {
+            ($method:expr, $ep:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
+
+            ($method:expr, $ep:expr, $data:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+
+                let encoded = trussed::cbor_serialize_bytes::<_, 512>(&$data).unwrap();
+                request.message.payload = encoded.to_vec();
+                request
+                    .message
+                    .set_content_format(ContentFormat::ApplicationCBOR);
+
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
+        }
+
         let state = &mut *(*self.state).borrow_mut();
         match state {
             State::Idle { timeout } => {
@@ -63,12 +90,8 @@ impl<'a> FobnailClient<'a> {
             State::RequestMetadata { request_pending } => {
                 if !*request_pending {
                     *request_pending = true;
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/metadata");
-                    request.set_method(RequestType::Fetch);
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
+
+                    coap_request!(RequestType::Fetch, "/metadata");
                 }
             }
             State::LoadAik { metadata } => {

@@ -221,3 +221,16 @@ pub struct PersistentRsaKey<'a> {
     #[serde(with = "serde_bytes")]
     pub e: &'a [u8],
 }
+
+#[derive(Debug, Serialize)]
+pub struct Nonce<'a> {
+    #[serde(with = "serde_bytes")]
+    pub nonce: &'a [u8],
+}
+
+impl<'a> Nonce<'a> {
+    #[inline]
+    pub fn new(nonce: &'a [u8]) -> Self {
+        Self { nonce }
+    }
+}

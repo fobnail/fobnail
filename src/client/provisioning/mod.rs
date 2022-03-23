@@ -5,8 +5,9 @@ use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
 use rsa::PublicKeyParts;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
+    client::CryptoClient,
     config::MAX_MESSAGE_LENGTH,
-    types::{Location, Message, PathBuf},
+    types::{Location, Mechanism, Message, PathBuf},
 };
 
 use crate::{
@@ -237,11 +238,17 @@ impl<'a> FobnailClient<'a> {
                 let mut trussed = self.trussed.borrow_mut();
 
                 match signing::decode_signed_object::<_, proto::Metadata>(
-                    *trussed, metadata, aik_pubkey,
-                )
-                .map(|(meta, _, hash)| (meta, hash))
-                {
-                    Ok((metadata, hash)) => {
+                    *trussed,
+                    metadata,
+                    aik_pubkey,
+                    &[],
+                ) {
+                    Ok((metadata, raw_metadata)) => {
+                        let h = trussed::syscall!(trussed.hash(
+                            Mechanism::Sha256,
+                            trussed::Bytes::from_slice(raw_metadata).unwrap()
+                        ));
+
                         info!("Received attester metadata:");
                         info!("  Version      : {}", metadata.version);
                         info!("  MAC          : {}", metadata.mac);
@@ -254,7 +261,7 @@ impl<'a> FobnailClient<'a> {
                         // states. Move data now to heap so we have to move only
                         // pointer to that data.
                         let mut hash_copy = Vec::new();
-                        hash_copy.extend_from_slice(hash.as_slice());
+                        hash_copy.extend_from_slice(h.hash.as_slice());
 
                         if Self::do_verify_metadata(&metadata) {
                             *state = State::RequestRim {
@@ -606,8 +613,8 @@ impl<'a> FobnailClient<'a> {
     where
         T: trussed::client::CryptoClient,
     {
-        let (rim, raw_rim, _) =
-            signing::decode_signed_object::<_, proto::Rim>(trussed, rim_with_sig, aik)?;
+        let (rim, raw_rim) =
+            signing::decode_signed_object::<_, proto::Rim>(trussed, rim_with_sig, aik, &[])?;
 
         Self::do_verify_pcrs(&rim.sha1, 20)?;
         Self::do_verify_pcrs(&rim.sha256, 32)?;
