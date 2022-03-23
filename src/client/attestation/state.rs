@@ -1,7 +1,7 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::fmt;
 
-use super::crypto::Key;
+use super::{crypto::Key, signing::Nonce};
 use crate::certmgr::X509Certificate;
 use pal::timer::get_time_ms;
 
@@ -48,6 +48,7 @@ pub enum State<'a> {
     /// Send metadata request and wait for response.
     RequestMetadata {
         aik_pubkey: Rc<Key<'a>>,
+        nonce: Nonce,
         request_pending: bool,
     },
 
@@ -56,6 +57,7 @@ pub enum State<'a> {
     VerifyMetadata {
         aik_pubkey: Rc<Key<'a>>,
         metadata: Vec<u8>,
+        nonce: Nonce,
     },
 
     /// Idle state with optional timeout. After timeout resets into Init state.

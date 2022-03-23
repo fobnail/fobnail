@@ -213,3 +213,16 @@ pub struct Rim<'a> {
     #[serde(borrow, default)]
     pub sha384: Pcrs<'a>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct Nonce<'a> {
+    #[serde(with = "serde_bytes")]
+    pub nonce: &'a [u8],
+}
+
+impl<'a> Nonce<'a> {
+    #[inline]
+    pub fn new(nonce: &'a [u8]) -> Self {
+        Self { nonce }
+    }
+}

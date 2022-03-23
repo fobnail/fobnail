@@ -6,11 +6,14 @@ use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
     api::reply::ReadFile,
-    types::{Location, PathBuf},
+    client::CryptoClient,
+    types::{Location, Mechanism, PathBuf},
 };
 
 use super::{
-    crypto, proto, signing, tpm,
+    crypto, proto,
+    signing::{self, generate_nonce},
+    tpm,
     util::{handle_server_error_response, HexFormatter},
 };
 use crate::{
@@ -51,6 +54,33 @@ impl<'a> FobnailClient<'a> {
     pub fn poll(&mut self, socket: SocketRef<'_, UdpSocket>) {
         self.coap_client.poll(socket);
 
+        macro_rules! coap_request {
+            ($method:expr, $ep:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
+
+            ($method:expr, $ep:expr, $data:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+
+                let encoded = trussed::cbor_serialize_bytes::<_, 512>(&$data).unwrap();
+                request.message.payload = encoded.to_vec();
+                request
+                    .message
+                    .set_content_format(ContentFormat::ApplicationCBOR);
+
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
+        }
+
         let state = &mut *(*self.state).borrow_mut();
         match state {
             State::Idle { timeout } => {
@@ -63,12 +93,7 @@ impl<'a> FobnailClient<'a> {
             State::RequestEkCert { request_pending } => {
                 if !*request_pending {
                     *request_pending = true;
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/ek");
-                    request.set_method(RequestType::Fetch);
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
+                    coap_request!(RequestType::Fetch, "/ek");
                 }
             }
             State::VerifyEkCertificate { data } => {
@@ -93,12 +118,7 @@ impl<'a> FobnailClient<'a> {
             } => {
                 if !*request_pending {
                     *request_pending = true;
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/aik");
-                    request.set_method(RequestType::Fetch);
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
+                    coap_request!(RequestType::Fetch, "/aik");
                 }
             }
             State::VerifyAikStage1 { data, ek_cert } => {
@@ -139,32 +159,25 @@ impl<'a> FobnailClient<'a> {
                 ..
             } => {
                 if !*request_pending {
-                    let encoded = trussed::cbor_serialize_bytes::<_, 512>(&proto::Challenge {
-                        id_object,
-                        encrypted_secret,
-                    })
-                    .unwrap();
-
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/challenge");
-                    request.set_method(RequestType::Post);
-                    request.message.payload = encoded.to_vec();
-                    request
-                        .message
-                        .set_content_format(ContentFormat::ApplicationCBOR);
-
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
-
                     *request_pending = true;
+
+                    coap_request!(
+                        RequestType::Post,
+                        "/challenge",
+                        proto::Challenge {
+                            id_object,
+                            encrypted_secret,
+                        }
+                    );
                 }
             }
             State::LoadAik { raw_aik } => match tpm::aik::load(raw_aik) {
                 Ok(aik) => {
+                    let mut trussed = self.trussed.borrow_mut();
                     *state = State::RequestMetadata {
                         aik_pubkey: aik,
                         request_pending: false,
+                        nonce: generate_nonce(*trussed),
                     }
                 }
                 Err(()) => {
@@ -173,40 +186,48 @@ impl<'a> FobnailClient<'a> {
                 }
             },
             State::RequestMetadata {
-                request_pending, ..
+                request_pending,
+                nonce,
+                ..
             } => {
                 if !*request_pending {
                     *request_pending = true;
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/metadata");
-                    request.set_method(RequestType::Fetch);
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
+
+                    coap_request!(
+                        RequestType::Fetch,
+                        "/metadata",
+                        proto::Nonce::new(&nonce[..])
+                    );
                 }
             }
             State::VerifyMetadata {
                 aik_pubkey,
                 metadata,
+                nonce,
             } => {
                 let mut trussed = self.trussed.borrow_mut();
 
                 match signing::decode_signed_object::<_, proto::Metadata>(
-                    *trussed, metadata, aik_pubkey,
-                )
-                .map(|(meta, _, hash)| (meta, hash))
-                {
-                    Ok((metadata, hash)) => {
+                    *trussed,
+                    metadata,
+                    aik_pubkey,
+                    &nonce[..],
+                ) {
+                    Ok((metadata, raw_metadata)) => {
                         info!("Attesting platform:");
                         info!("  Manufacturer : {}", metadata.manufacturer);
                         info!("  Product      : {}", metadata.product_name);
                         info!("  Serial       : {}", metadata.serial_number);
                         info!("  MAC          : {}", metadata.mac);
 
-                        match Self::load_rim(*trussed, &hash) {
+                        let h = trussed::syscall!(trussed.hash(
+                            Mechanism::Sha256,
+                            trussed::Bytes::from_slice(raw_metadata).unwrap()
+                        ));
+
+                        match Self::load_rim(*trussed, &h.hash) {
                             Ok(_rim) => {
-                                error!("Attestation is not implemented");
-                                state.error();
+                                todo!();
                             }
                             Err(()) => state.error(),
                         }
@@ -306,11 +327,14 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             }
-            State::RequestMetadata { aik_pubkey, .. } => {
+            State::RequestMetadata {
+                aik_pubkey, nonce, ..
+            } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
                     *state = State::VerifyMetadata {
                         metadata: result.payload,
                         aik_pubkey: Rc::clone(aik_pubkey),
+                        nonce: *nonce,
                     }
                 } else {
                     error!("Server gave invalid response to metadata request");
