@@ -86,6 +86,8 @@ impl<'a> OperationMode<'a> {
     }
 
     pub fn provisioning(self) -> Self {
+        // FIXME: reinitializing CoapClient resets its message ID which is used
+        // for deduplication
         Self::Provisioning(provisioning::FobnailClient::new(
             CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT),
             self.reclaim_trussed(),
@@ -93,6 +95,8 @@ impl<'a> OperationMode<'a> {
     }
 
     pub fn attestation(self) -> Self {
+        // FIXME: reinitializing CoapClient resets its message ID which is used
+        // for deduplication
         Self::Attestation(attestation::FobnailClient::new(
             CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT),
             self.reclaim_trussed(),

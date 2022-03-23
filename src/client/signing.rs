@@ -5,12 +5,15 @@ use rsa::PublicKey as _;
 use serde::Deserialize;
 use trussed::types::Mechanism;
 
+pub const NONCE_SIZE: usize = 32;
+
 /// Verifies signature and decodes a CBOR-encoded object if signature is valid.
 pub fn decode_signed_object<'a: 'de, 'de, S, T>(
     trussed: &mut S,
     data: &'a [u8],
     signing_key: &crypto::Key,
-) -> Result<(T, &'a [u8], trussed::types::ShortData), ()>
+    nonce: &[u8],
+) -> Result<(T, &'a [u8]), ()>
 where
     S: trussed::client::CryptoClient,
     T: Deserialize<'de> + 'a,
@@ -22,13 +25,13 @@ where
     // We expect SHA256 for RSA and SHA512 for Ed25519
     match signing_key {
         crypto::Key::Rsa(key) => {
-            let sha = trussed::try_syscall!(trussed.hash(
-                Mechanism::Sha256,
-                trussed::Bytes::from_slice(signed_object.data).unwrap(),
-            ))
-            .map_err(|e| {
-                error!("Failed to compute SHA-256: {:?}", e);
-            })?;
+            let mut data_to_hash = trussed::Bytes::from_slice(signed_object.data).unwrap();
+            data_to_hash.extend_from_slice(nonce).unwrap();
+
+            let sha = trussed::try_syscall!(trussed.hash(Mechanism::Sha256, data_to_hash))
+                .map_err(|e| {
+                    error!("Failed to compute SHA-256: {:?}", e);
+                })?;
             // Currently, Trussed does not provide RSA support so we use
             // rsa crate directly.
             match key.inner.verify(
@@ -47,7 +50,7 @@ where
                                 e
                             )
                         })?;
-                    Ok((inner_object, signed_object.data, sha.hash))
+                    Ok((inner_object, signed_object.data))
                 }
                 Err(e) => {
                     error!("Signature verification failed: {}", e);
@@ -76,4 +79,14 @@ where
     })?;
 
     Ok(sha.hash)
+}
+
+pub type Nonce = [u8; NONCE_SIZE];
+
+pub fn generate_nonce<T>(trussed: &mut T) -> Nonce
+where
+    T: trussed::client::CryptoClient,
+{
+    let r = trussed::syscall!(trussed.random_bytes(NONCE_SIZE));
+    r.bytes.as_slice().try_into().unwrap()
 }

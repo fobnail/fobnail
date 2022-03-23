@@ -98,6 +98,9 @@ impl<'a> CoapClient<'a> {
             // value of the variable (e.g., on startup) be randomized, in order
             // to make successful off-path attacks on the protocol less likely.
             // TODO: do we need this?
+            // FIXME: using the same message ID on boot may cause server to
+            // respond with a cached copy of message due to server thinking
+            // the message is a duplicate.
             next_token: 0,
             next_msg_id: 0,
         }
@@ -538,8 +541,10 @@ impl<'a> CoapClient<'a> {
         request.message.set_token(token.to_ne_bytes().to_vec());
 
         let mut list = LinkedList::new();
+        // FIXME: m bit (on Block2 option) should be set to 0 if this is the
+        // last packet and 1 if we expect more packets.
         list.push_back(
-            Self::encode_block12_option(block_size, block_number, true)
+            Self::encode_block12_option(block_size, block_number, false)
                 .ok_or(Error::ProtocolError)?,
         );
         request.message.set_option(CoapOption::Block2, list);

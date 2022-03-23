@@ -1,7 +1,7 @@
 use core::cell::RefCell;
 
 use alloc::{rc::Rc, vec::Vec};
-use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
+use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
@@ -10,10 +10,14 @@ use trussed::{
 };
 
 use super::{
-    crypto, proto, signing,
-    util::{format_hex, handle_server_error_response, HexFormatter},
+    crypto, proto,
+    signing::{self, generate_nonce},
+    util::{handle_server_error_response, HexFormatter},
 };
-use crate::coap::{CoapClient, Error};
+use crate::{
+    client::util::format_hex,
+    coap::{CoapClient, Error},
+};
 use state::State;
 
 mod state;
@@ -46,6 +50,33 @@ impl<'a> FobnailClient<'a> {
     pub fn poll(&mut self, socket: SocketRef<'_, UdpSocket>) {
         self.coap_client.poll(socket);
 
+        macro_rules! coap_request {
+            ($method:expr, $ep:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
+
+            ($method:expr, $ep:expr, $data:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+
+                let encoded = trussed::cbor_serialize_bytes::<_, 512>(&$data).unwrap();
+                request.message.payload = encoded.to_vec();
+                request
+                    .message
+                    .set_content_format(ContentFormat::ApplicationCBOR);
+
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
+        }
+
         let state = &mut *(*self.state).borrow_mut();
         match state {
             State::Idle { timeout } => {
@@ -58,19 +89,25 @@ impl<'a> FobnailClient<'a> {
             State::RequestMetadata { request_pending } => {
                 if !*request_pending {
                     *request_pending = true;
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/metadata");
-                    request.set_method(RequestType::Fetch);
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
+
+                    coap_request!(RequestType::Fetch, "/metadata");
                 }
             }
             State::LoadAik { metadata } => {
                 let mut trussed = self.trussed.borrow_mut();
                 match signing::hash_signed_object(*trussed, metadata.as_slice()) {
                     Ok(hash) => match Self::load_aik(*trussed, hash.as_slice()) {
-                        Ok(_aik) => todo!(),
+                        Ok(aik_pubkey) => match Self::load_rim(*trussed, &hash) {
+                            Ok(rim) => {
+                                *state = State::RequestEvidence {
+                                    aik_pubkey: Rc::new(aik_pubkey),
+                                    nonce: generate_nonce(*trussed),
+                                    rim,
+                                    request_pending: false,
+                                }
+                            }
+                            Err(()) => state.error(),
+                        },
                         Err(()) => {
                             error!("Could not load AIK");
                             state.error()
@@ -82,6 +119,38 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
+            State::RequestEvidence {
+                request_pending,
+                nonce,
+                ..
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+
+                    coap_request!(RequestType::Fetch, "/rim", &proto::Nonce::new(&nonce[..]));
+                }
+            }
+            State::VerifyEvidence {
+                nonce,
+                evidence,
+                rim,
+                aik_pubkey,
+            } => {
+                let mut trussed = self.trussed.borrow_mut();
+                match Self::verify_evidence(*trussed, nonce, rim, evidence, aik_pubkey) {
+                    Ok(()) => {
+                        info!("Attestation complete");
+                        // TODO: should clearly notify user that attestation is
+                        // successful
+                        // On real hardware this will be a green LED
+                    }
+                    Err(()) => {
+                        // TODO: should clearly notify user that attestation has
+                        // failed (red LED)
+                        state.error()
+                    }
+                }
+            }
         }
     }
 
@@ -89,7 +158,7 @@ impl<'a> FobnailClient<'a> {
         let state = &mut *(*state).borrow_mut();
 
         match state {
-            State::RequestMetadata { .. } => match result {
+            State::RequestMetadata { .. } | State::RequestEvidence { .. } => match result {
                 Ok(resp) => {
                     Self::handle_server_response(resp, state);
                 }
@@ -101,7 +170,7 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             },
-            State::Idle { .. } | State::LoadAik { .. } => {
+            State::Idle { .. } | State::LoadAik { .. } | State::VerifyEvidence { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -131,6 +200,30 @@ impl<'a> FobnailClient<'a> {
                 } else {
                     error!("Server gave invalid response to metadata request");
                     state.error();
+                }
+            }
+            State::RequestEvidence {
+                aik_pubkey,
+                rim,
+                nonce,
+                ..
+            } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    // Trick to move data without copying.
+                    // Rust won't allow us just move out data because doing
+                    // so would make state invalid.
+                    let mut rim_moved = vec![];
+                    core::mem::swap(rim, &mut rim_moved);
+
+                    *state = State::VerifyEvidence {
+                        aik_pubkey: Rc::clone(aik_pubkey),
+                        rim: rim_moved,
+                        evidence: result.payload,
+                        nonce: *nonce,
+                    }
+                } else {
+                    error!("Server gave invalid response to evidence request");
+                    state.error()
                 }
             }
             _ => {
@@ -187,5 +280,24 @@ impl<'a> FobnailClient<'a> {
             .map_err(|_| {
                 error!("AIK is corrupted, please re-provision your platform");
             })
+    }
+
+    fn verify_evidence<T>(
+        trussed: &mut T,
+        nonce: &[u8],
+        rim: &[u8],
+        evidence: &[u8],
+        aik: &Rc<crypto::Key>,
+    ) -> Result<(), ()>
+    where
+        T: trussed::client::CryptoClient,
+    {
+        info!("nonce: {}", HexFormatter(nonce));
+        signing::decode_signed_object::<_, proto::Rim>(trussed, evidence, aik, nonce)
+            .map_err(|_| error!("Evidence has invalid signature"))?;
+
+        //todo!()
+        info!("CHECKPOINT");
+        Err(())
     }
 }
