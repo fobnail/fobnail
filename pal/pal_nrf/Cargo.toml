@@ -27,7 +27,7 @@ linked_list_allocator = { version = "0.9.1", default-features = false, features 
 rand_core = { version = "0.6", default-features = false }
 chacha20 = { version = "0.8", features = ["rng"] }
 littlefs2 = "0.3"
-embedded-storage = "0.2"
+embedded-storage = "0.3"
 
 # Must be kept in sync with pal_nrf and pal_pc
 [dependencies.trussed]
