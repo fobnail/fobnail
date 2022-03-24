@@ -203,6 +203,28 @@ pub struct PcrBank<'a> {
     pub pcr: ArrayOf<'a, &'a serde_bytes::Bytes>,
 }
 
+impl PcrBank<'_> {
+    /// Check if specified PCR is present
+    pub fn pcr_present(&self, index: u32) -> bool {
+        if index > 31 {
+            return false;
+        }
+        self.pcrs & (1 << index) != 0
+    }
+
+    /// Obtain PCR by its index.
+    pub fn pcr(&self, index: u32) -> Option<&[u8]> {
+        if !self.pcr_present(index) {
+            None
+        } else {
+            let mut bitmap = self.pcrs;
+            bitmap &= (1 << index) - 1;
+
+            Some(&self.pcr.inner.get(bitmap.count_ones() as usize).unwrap()[..])
+        }
+    }
+}
+
 impl<'a> IntoIterator for &'a PcrBank<'a> {
     type Item = <Self::IntoIter as Iterator>::Item;
     type IntoIter = PcrIterator<'a>;
@@ -266,6 +288,42 @@ pub struct PersistentRsaKey<'a> {
     pub e: &'a [u8],
 }
 
+impl<'a> Rim<'a> {
+    pub fn verify(&self) -> Result<(), ()> {
+        Self::do_verify_pcrs(&self.sha1, 20)?;
+        Self::do_verify_pcrs(&self.sha256, 32)?;
+        Self::do_verify_pcrs(&self.sha384, 48)?;
+        Ok(())
+    }
+
+    fn do_verify_pcrs(pcrs: &PcrBank, expected_pcr_len: usize) -> Result<(), ()> {
+        // pcrs is a bitmask representing which PCRs are present and which are
+        // not.
+        let n1 = pcrs.pcrs.count_ones() as usize;
+        let n2 = pcrs.pcr.len();
+        if n1 != n2 {
+            error!(
+                "PCR count does not match, count from mask is {}, but really there are {} PCRs",
+                n1, n2
+            );
+            return Err(());
+        }
+
+        for pcr in pcrs.pcr.iter() {
+            if pcr.len() != expected_pcr_len {
+                error!(
+                    "Invalid PCR size {}, expected {}",
+                    pcr.len(),
+                    expected_pcr_len
+                );
+                return Err(());
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct Nonce<'a> {
     #[serde(with = "serde_bytes")]
@@ -277,4 +335,60 @@ impl<'a> Nonce<'a> {
     pub fn new(nonce: &'a [u8]) -> Self {
         Self { nonce }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::marker::PhantomData;
+
+    use super::{ArrayOf, PcrBank};
+
+    #[test]
+    fn test_pcr_bank_get() {
+        let pcr0 = &[
+            0x96, 0xd8, 0x63, 0xde, 0xd7, 0x45, 0x94, 0xca, 0x52, 0x75, 0x71, 0x95, 0x5c, 0x5e,
+            0x13, 0xff, 0x2b, 0x1b, 0xa4, 0xa2,
+        ];
+        let pcr1 = &[
+            0x2d, 0x7d, 0xda, 0x44, 0x1b, 0x16, 0x25, 0x55, 0x11, 0x5e, 0x60, 0xa1, 0x1b, 0x24,
+            0xf1, 0x57, 0xbe, 0xfa, 0x15, 0x71,
+        ];
+        let pcr2 = &[
+            0xc0, 0x50, 0xab, 0xe4, 0xce, 0x87, 0xa2, 0xa7, 0x54, 0x93, 0xe7, 0x8a, 0xfb, 0xed,
+            0x49, 0x0e, 0x5b, 0x39, 0x10, 0xb5,
+        ];
+        let pcr8 = &[
+            0xc7, 0x14, 0x62, 0xb0, 0x4d, 0x76, 0x8e, 0xf1, 0x54, 0xe3, 0xaa, 0x26, 0x1c, 0x6f,
+            0x0a, 0xc3, 0x32, 0x79, 0xaa, 0x1b,
+        ];
+
+        let bank = PcrBank {
+            pcrs: 0x107,
+            pcr: ArrayOf {
+                inner: vec![
+                    serde_bytes::Bytes::new(pcr0),
+                    serde_bytes::Bytes::new(pcr1),
+                    serde_bytes::Bytes::new(pcr2),
+                    serde_bytes::Bytes::new(pcr8),
+                ],
+                phantom: PhantomData,
+            },
+        };
+
+        assert_eq!(bank.pcr(1), Some(&pcr1[..]));
+        assert_eq!(bank.pcr(0), Some(&pcr0[..]));
+        assert_eq!(bank.pcr(2), Some(&pcr2[..]));
+        assert_eq!(bank.pcr(4), None);
+        assert_eq!(bank.pcr(7), None);
+        assert_eq!(bank.pcr(6), None);
+        assert_eq!(bank.pcr(8), Some(&pcr8[..]));
+        assert_eq!(bank.pcr(31), None);
+        assert_eq!(bank.pcr(452), None);
+    }
+
+    // TODO:
+    // check PCR iterator
+    // check RIM integrity verification
+    // should also check deserializing and serializing of data, one day it could
+    // break after serde (unlikely) update or cbor-smol (possible)
 }

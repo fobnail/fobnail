@@ -10,7 +10,9 @@ use trussed::{
 };
 
 use super::{
-    crypto, proto,
+    crypto,
+    policy::Policy,
+    proto,
     signing::{self, generate_nonce},
     util::{handle_server_error_response, HexFormatter},
 };
@@ -104,6 +106,9 @@ impl<'a> FobnailClient<'a> {
                                     nonce: generate_nonce(*trussed),
                                     rim,
                                     request_pending: false,
+                                    // TODO: policy should be loaded from
+                                    // internal storage
+                                    policy: Policy::default(),
                                 }
                             }
                             Err(()) => state.error(),
@@ -135,9 +140,10 @@ impl<'a> FobnailClient<'a> {
                 evidence,
                 rim,
                 aik_pubkey,
+                policy,
             } => {
                 let mut trussed = self.trussed.borrow_mut();
-                match Self::verify_evidence(*trussed, nonce, rim, evidence, aik_pubkey) {
+                match Self::verify_evidence(*trussed, nonce, rim, evidence, aik_pubkey, policy) {
                     Ok(()) => {
                         info!("Attestation complete");
                         // TODO: should clearly notify user that attestation is
@@ -206,6 +212,7 @@ impl<'a> FobnailClient<'a> {
                 aik_pubkey,
                 rim,
                 nonce,
+                policy,
                 ..
             } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
@@ -220,6 +227,7 @@ impl<'a> FobnailClient<'a> {
                         rim: rim_moved,
                         evidence: result.payload,
                         nonce: *nonce,
+                        policy: *policy,
                     }
                 } else {
                     error!("Server gave invalid response to evidence request");
@@ -288,16 +296,47 @@ impl<'a> FobnailClient<'a> {
         rim: &[u8],
         evidence: &[u8],
         aik: &Rc<crypto::Key>,
+        _policy: &Policy,
     ) -> Result<(), ()>
     where
         T: trussed::client::CryptoClient,
     {
-        info!("nonce: {}", HexFormatter(nonce));
-        signing::decode_signed_object::<_, proto::Rim>(trussed, evidence, aik, nonce)
-            .map_err(|_| error!("Evidence has invalid signature"))?;
+        // Load and verify integrity of RIM stored in internal memory.
+        let rim = trussed::cbor_deserialize::<proto::Rim>(rim).map_err(|e| {
+            error!("Failed to deserialize RIM from internal storage: {}", e);
+            error!("RIM is corrupted, please re-provision your platform");
+        })?;
+        rim.verify().map_err(|_| {
+            error!("RIM is corrupted, please re-provision your platform");
+        })?;
 
-        //todo!()
-        info!("CHECKPOINT");
+        // Verify integrity of evidence
+        let (evidence, _) =
+            signing::decode_signed_object::<_, proto::Rim>(trussed, evidence, aik, nonce)
+                .map_err(|_| error!("Evidence has invalid signature"))?;
+        evidence.verify().map_err(|_| {
+            error!("Evidence contains invalid data");
+        })?;
+
+        // Do an actual evidence verification (appraisal) against RIMs and
+        // policy
+
+        info!("Commencing evidence verification");
+
+        // very simple test
+        // TODO: update_ctr?
+        for (idx, pcr) in &rim.sha1 {
+            if let Some(pcr_from_evidence) = evidence.sha1.pcr(idx) {
+                if pcr_from_evidence == pcr {
+                    debug!("pcr{:02}: match", idx);
+                } else {
+                    error!("pcr{:02}: mismatch", idx);
+                }
+            } else {
+                error!("pcr{:02}: missing", idx);
+            }
+        }
+
         Err(())
     }
 }

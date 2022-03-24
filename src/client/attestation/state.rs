@@ -1,7 +1,7 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::fmt;
 
-use super::{crypto::Key, signing::Nonce};
+use super::{crypto::Key, signing::Nonce, Policy};
 use pal::timer::get_time_ms;
 
 pub enum State {
@@ -18,6 +18,7 @@ pub enum State {
         rim: Vec<u8>,
         request_pending: bool,
         nonce: Nonce,
+        policy: Policy,
     },
 
     VerifyEvidence {
@@ -25,6 +26,7 @@ pub enum State {
         rim: Vec<u8>,
         evidence: Vec<u8>,
         nonce: Nonce,
+        policy: Policy,
     },
 
     /// Idle state with optional timeout. After timeout resets into Init state.

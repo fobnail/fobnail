@@ -616,9 +616,7 @@ impl<'a> FobnailClient<'a> {
         let (rim, raw_rim) =
             signing::decode_signed_object::<_, proto::Rim>(trussed, rim_with_sig, aik, &[])?;
 
-        Self::do_verify_pcrs(&rim.sha1, 20)?;
-        Self::do_verify_pcrs(&rim.sha256, 32)?;
-        Self::do_verify_pcrs(&rim.sha384, 48)?;
+        rim.verify().map_err(|_| error!("RIM is invalid"))?;
 
         if rim.sha1.pcrs != 0 {
             info!("sha1:");
@@ -642,32 +640,5 @@ impl<'a> FobnailClient<'a> {
         }
 
         Ok((rim, raw_rim))
-    }
-
-    fn do_verify_pcrs(pcrs: &proto::PcrBank, expected_pcr_len: usize) -> Result<(), ()> {
-        // pcrs is a bitmask representing which PCRs are present and which are
-        // not.
-        let n1 = pcrs.pcrs.count_ones() as usize;
-        let n2 = pcrs.pcr.len();
-        if n1 != n2 {
-            error!(
-                "PCR count does not match, count from mask is {}, but really there are {} PCRs",
-                n1, n2
-            );
-            return Err(());
-        }
-
-        for pcr in pcrs.pcr.iter() {
-            if pcr.len() != expected_pcr_len {
-                error!(
-                    "Invalid PCR size {}, expected {}",
-                    pcr.len(),
-                    expected_pcr_len
-                );
-                return Err(());
-            }
-        }
-
-        Ok(())
     }
 }
