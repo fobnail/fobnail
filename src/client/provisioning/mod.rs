@@ -2,8 +2,12 @@ use core::cell::RefCell;
 
 use alloc::{rc::Rc, vec::Vec};
 use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
+use rsa::PublicKeyParts;
 use smoltcp::socket::{SocketRef, UdpSocket};
-use trussed::types::{Location, Message, PathBuf};
+use trussed::{
+    config::MAX_MESSAGE_LENGTH,
+    types::{Location, Message, PathBuf},
+};
 
 use crate::{
     certmgr::CertMgr,
@@ -277,7 +281,7 @@ impl<'a> FobnailClient<'a> {
                     *request_pending = true;
                 }
             }
-            State::VerifyStoreRim {
+            State::VerifyStoreRimAik {
                 rim,
                 aik_pubkey,
                 metadata_hash,
@@ -290,18 +294,21 @@ impl<'a> FobnailClient<'a> {
                         // sanity of the RIM itself.
                         // Avoid re-encoding and save it as-is but with stripped
                         // signature which we don't need anymore.
-                        match Self::store_rim(
-                            *trussed,
-                            metadata_hash
-                                .as_slice()
-                                .try_into()
-                                .expect("invalid length of metadata hash"),
-                            raw_rim,
-                        ) {
-                            Ok(()) => {
-                                info!("Provisioning complete");
-                                state.done();
-                            }
+                        let meta = metadata_hash
+                            .as_slice()
+                            .try_into()
+                            .expect("invalid length of metadata hash");
+                        match Self::store_rim(*trussed, meta, raw_rim) {
+                            Ok(()) => match Self::store_aik(*trussed, meta, aik_pubkey) {
+                                Ok(()) => {
+                                    info!("Provisioning complete");
+                                    state.done();
+                                }
+                                Err(()) => {
+                                    error!("Failed to save AIK in persistent storage");
+                                    state.error();
+                                }
+                            },
                             Err(()) => {
                                 error!("Failed to save RIM in persistent storage");
                                 state.error();
@@ -345,7 +352,7 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyMetadata { .. }
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
-            | State::VerifyStoreRim { .. } => {
+            | State::VerifyStoreRimAik { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -441,7 +448,7 @@ impl<'a> FobnailClient<'a> {
                     let mut hash = vec![];
                     core::mem::swap(metadata_hash, &mut hash);
 
-                    *state = State::VerifyStoreRim {
+                    *state = State::VerifyStoreRimAik {
                         rim: result.payload,
                         aik_pubkey: Rc::clone(aik_pubkey),
                         metadata_hash: hash,
@@ -459,7 +466,7 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyMetadata { .. }
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
-            | State::VerifyStoreRim { .. }
+            | State::VerifyStoreRimAik { .. }
             | State::Done => {
                 unreachable!()
             }
@@ -538,6 +545,62 @@ impl<'a> FobnailClient<'a> {
                 .map_err(|e| {
                     error!("Failed to save RIM: {:?}", e);
                 })?;
+
+            info!("Wrote {}", path_str);
+            Ok(())
+        }
+    }
+
+    fn store_aik<T>(
+        trussed: &mut T,
+        metadata_hash: &[u8; 32],
+        aik_pubkey: &Rc<crypto::Key>,
+    ) -> Result<(), ()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        let metadata_hash = format_hex(metadata_hash);
+        let meta_dir = PathBuf::from(b"/meta/");
+        let path_str = format!("/meta/{}_aik", metadata_hash);
+
+        let serialized = match aik_pubkey.as_ref() {
+            crypto::Key::Rsa(rsa) => {
+                let key = proto::PersistentRsaKey {
+                    n: &rsa.inner.n().to_bytes_be()[..],
+                    e: &rsa.inner.e().to_bytes_be()[..],
+                };
+                trussed::cbor_serialize_bytes::<_, MAX_MESSAGE_LENGTH>(&key).unwrap()
+            }
+        };
+
+        let mut locate = trussed::syscall!(trussed.locate_file(
+            Location::Internal,
+            Some(meta_dir),
+            PathBuf::from(metadata_hash.as_str())
+        ));
+        if let Some(path) = locate.path.take() {
+            // File already exists, compare contents of with the old AIK and
+            // current AIK, if these are the same avoid writing to flash.
+            let r = trussed::syscall!(trussed.read_file(Location::Internal, path));
+            if r.data == serialized {
+                debug!("{} didn't change since last write", path_str);
+                return Ok(());
+            }
+        }
+
+        let path = PathBuf::from(path_str.as_str());
+        if serialized.len() > trussed::config::MAX_MESSAGE_LENGTH {
+            error!(
+                "AIK is too big: size exceeds MAX_MESSAGE_LENGTH ({} vs {})",
+                serialized.len(),
+                trussed::config::MAX_MESSAGE_LENGTH
+            );
+            Err(())
+        } else {
+            trussed::try_syscall!(trussed.write_file(Location::Internal, path, serialized, None))
+                .map_err(|e| {
+                error!("Failed to save AIK: {:?}", e);
+            })?;
 
             info!("Wrote {}", path_str);
             Ok(())

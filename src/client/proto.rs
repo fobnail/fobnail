@@ -213,3 +213,11 @@ pub struct Rim<'a> {
     #[serde(borrow, default)]
     pub sha384: Pcrs<'a>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PersistentRsaKey<'a> {
+    #[serde(with = "serde_bytes")]
+    pub n: &'a [u8],
+    #[serde(with = "serde_bytes")]
+    pub e: &'a [u8],
+}
