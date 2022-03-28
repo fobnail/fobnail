@@ -74,8 +74,9 @@ pub enum State<'a> {
         request_pending: bool,
     },
 
-    /// Verify Reference Integrity Manifest
-    VerifyStoreRim {
+    /// Verify Reference Integrity Manifest, store it together with public part
+    /// of AIK.
+    VerifyStoreRimAik {
         metadata_hash: Vec<u8>,
         rim: Vec<u8>,
         aik_pubkey: Rc<Key<'a>>,
@@ -125,7 +126,7 @@ impl fmt::Display for State<'_> {
             Self::RequestMetadata { .. } => write!(f, "request metadata"),
             Self::VerifyMetadata { .. } => write!(f, "verify metadata"),
             Self::RequestRim { .. } => write!(f, "request RIM"),
-            Self::VerifyStoreRim { .. } => write!(f, "verify RIM"),
+            Self::VerifyStoreRimAik { .. } => write!(f, "verify RIM"),
             Self::Idle { .. } => write!(f, "idle"),
             Self::Done => write!(f, "done"),
         }
