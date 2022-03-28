@@ -34,10 +34,6 @@ impl<'a> Signature<'a> {
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.signature.len()
-    }
-
     pub fn as_bytes(&self) -> &[u8] {
         self.signature
     }
