@@ -57,3 +57,23 @@ where
         }
     }
 }
+
+/// Computes SHA-256 hash of inner object
+pub fn hash_signed_object<T>(trussed: &mut T, data: &[u8]) -> Result<trussed::types::ShortData, ()>
+where
+    T: trussed::client::CryptoClient,
+{
+    let signed_object = trussed::cbor_deserialize::<SignedObject>(data).map_err(|e| {
+        error!("Failed to deserialize signed object (outer): {}", e);
+    })?;
+
+    let sha = trussed::try_syscall!(trussed.hash(
+        Mechanism::Sha256,
+        trussed::Bytes::from_slice(signed_object.data).unwrap(),
+    ))
+    .map_err(|e| {
+        error!("Failed to compute SHA-256: {:?}", e);
+    })?;
+
+    Ok(sha.hash)
+}
