@@ -1,15 +1,19 @@
 use core::cell::RefCell;
 
 use alloc::rc::Rc;
-use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
+use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
-
-use super::{proto, tpm, util::handle_server_error_response};
-use crate::{
-    certmgr::CertMgr,
-    coap::{CoapClient, Error},
+use trussed::{
+    api::reply::ReadFile,
+    types::{Location, PathBuf},
 };
+
+use super::{
+    crypto, proto, signing,
+    util::{format_hex, handle_server_error_response},
+};
+use crate::coap::{CoapClient, Error};
 use state::State;
 
 mod state;
@@ -19,7 +23,6 @@ pub struct FobnailClient<'a> {
     state: Rc<RefCell<State>>,
     coap_client: CoapClient<'a>,
     trussed: RefCell<&'a mut trussed::ClientImplementation<pal::trussed::Syscall>>,
-    certmgr: CertMgr,
 }
 
 impl<'a> FobnailClient<'a> {
@@ -31,7 +34,6 @@ impl<'a> FobnailClient<'a> {
             state: Rc::new(RefCell::new(State::default())),
             coap_client,
             trussed: RefCell::new(trussed),
-            certmgr: CertMgr {},
         }
     }
 
@@ -53,115 +55,33 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
-            State::RequestEkCert { request_pending } => {
+            State::RequestMetadata { request_pending } => {
                 if !*request_pending {
                     *request_pending = true;
                     let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/ek");
+                    request.set_path("/metadata");
                     request.set_method(RequestType::Fetch);
                     let state = Rc::clone(&self.state);
                     self.coap_client
                         .queue_request(request, move |result| Self::handle_response(result, state));
                 }
             }
-            State::VerifyEkCertificate { data } => {
+            State::LoadAik { metadata } => {
                 let mut trussed = self.trussed.borrow_mut();
-
-                match tpm::ek::load(*trussed, &self.certmgr, data) {
-                    Ok(cert) => {
-                        *state = State::RequestAik {
-                            request_pending: false,
-                            ek_cert: Some(cert),
-                        };
-                    }
-                    Err(e) => {
-                        error!("Failed to load EK certificate: {}", e);
-                        state.error()
-                    }
-                }
-            }
-            State::RequestAik {
-                ref mut request_pending,
-                ..
-            } => {
-                if !*request_pending {
-                    *request_pending = true;
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/aik");
-                    request.set_method(RequestType::Fetch);
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
-                }
-            }
-            State::VerifyAikStage1 { data, ek_cert } => {
-                let mut trussed = self.trussed.borrow_mut();
-
-                match tpm::aik::decode(*trussed, data).and_then(|(_tpm_public, loaded_key_name)| {
-                    tpm::prepare_aik_challenge(
-                        *trussed,
-                        tpm::mu::LoadedKeyName::decode(&loaded_key_name).unwrap(),
-                        ek_cert,
-                    )
-                }) {
-                    Ok((secret, id_object, encrypted_secret)) => {
-                        // Trick to move data without copying.
-                        // Rust won't allow us just move out data because doing
-                        // so would make state invalid.
-                        let mut aik = vec![];
-                        core::mem::swap(data, &mut aik);
-
-                        *state = State::VerifyAikStage2 {
-                            request_pending: false,
-                            secret,
-                            id_object,
-                            encrypted_secret,
-                            aik,
+                match signing::hash_signed_object(*trussed, metadata.as_slice()) {
+                    Ok(hash) => match Self::load_aik(*trussed, hash.as_slice()) {
+                        Ok(_aik) => todo!(),
+                        Err(()) => {
+                            error!("Could not load AIK");
+                            state.error()
                         }
-                    }
+                    },
                     Err(()) => {
-                        error!("AIK verification failed");
+                        error!("Invalid metadata");
                         state.error();
                     }
                 }
             }
-            State::VerifyAikStage2 {
-                request_pending,
-                id_object,
-                encrypted_secret,
-                ..
-            } => {
-                if !*request_pending {
-                    let encoded = trussed::cbor_serialize_bytes::<_, 512>(&proto::Challenge {
-                        id_object,
-                        encrypted_secret,
-                    })
-                    .unwrap();
-
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/challenge");
-                    request.set_method(RequestType::Post);
-                    request.message.payload = encoded.to_vec();
-                    request
-                        .message
-                        .set_content_format(ContentFormat::ApplicationCBOR);
-
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
-
-                    *request_pending = true;
-                }
-            }
-            State::LoadAik { raw_aik } => match tpm::aik::load(raw_aik) {
-                Ok(_aik) => {
-                    unimplemented!()
-                }
-                Err(()) => {
-                    error!("Failed to load AIK");
-                    state.error();
-                }
-            },
         }
     }
 
@@ -169,9 +89,7 @@ impl<'a> FobnailClient<'a> {
         let state = &mut *(*state).borrow_mut();
 
         match state {
-            State::RequestEkCert { .. }
-            | State::RequestAik { .. }
-            | State::VerifyAikStage2 { .. } => match result {
+            State::RequestMetadata { .. } => match result {
                 Ok(resp) => {
                     Self::handle_server_response(resp, state);
                 }
@@ -183,10 +101,7 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             },
-            State::VerifyEkCertificate { .. }
-            | State::VerifyAikStage1 { .. }
-            | State::Idle { .. }
-            | State::LoadAik { .. } => {
+            State::Idle { .. } | State::LoadAik { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -208,48 +123,42 @@ impl<'a> FobnailClient<'a> {
         }
 
         match state {
-            State::RequestEkCert { .. } => {
-                info!("Received EK certificate");
-
+            State::RequestMetadata { .. } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
-                    *state = State::VerifyEkCertificate {
-                        data: result.payload,
+                    *state = State::LoadAik {
+                        metadata: result.payload,
                     }
                 } else {
-                    error!("Server gave invalid response to EK request");
-                    state.error();
-                }
-            }
-            State::RequestAik { ek_cert, .. } => {
-                if result.header.code == MessageClass::Response(ResponseType::Content) {
-                    *state = State::VerifyAikStage1 {
-                        data: result.payload,
-                        ek_cert: ek_cert.take().unwrap(),
-                    };
-                } else {
-                    error!("Server gave invalid response to AIK request");
-                    state.error();
-                }
-            }
-            State::VerifyAikStage2 { secret, aik, .. } => {
-                if result.header.code == MessageClass::Response(ResponseType::Created) {
-                    if result.payload.as_slice() == secret.as_slice() {
-                        // Trick to move data without copying.
-                        // Rust won't allow us just move out data because doing
-                        // so would make state invalid.
-                        let mut raw_aik = vec![];
-                        core::mem::swap(aik, &mut raw_aik);
-                        *state = State::LoadAik { raw_aik };
-                    } else {
-                        error!("Attester has failed challenge");
-                        state.error();
-                    }
-                } else {
-                    error!("Invalid response during AIK stage 1 verification");
+                    error!("Server gave invalid response to metadata request");
                     state.error();
                 }
             }
             _ => unimplemented!(),
         }
+    }
+
+    /// Load AIK from internal storage.
+    fn load_aik<T>(trussed: &mut T, metadata_hash: &[u8]) -> Result<crypto::Key<'static>, ()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        let metadata_hash = format_hex(metadata_hash);
+        let path_str = format!("/meta/{}_aik", metadata_hash);
+        let path = PathBuf::from(path_str.as_bytes());
+
+        debug!("Loading AIK from {}", path_str);
+
+        let ReadFile { data } = trussed::try_syscall!(trussed.read_file(Location::Internal, path))
+            .map_err(|_| error!("Failed to load AIK (is the platform provisioned?)"))?;
+        let proto::PersistentRsaKey { n, e } = trussed::cbor_deserialize(&data).map_err(|e| {
+            error!("Failed to deserialize persistent key: {}", e);
+            error!("AIK is corrupted, please re-provision your platform");
+        })?;
+
+        crypto::RsaKey::load2(n, e)
+            .map(crypto::Key::Rsa)
+            .map_err(|_| {
+                error!("AIK is corrupted, please re-provision your platform");
+            })
     }
 }
