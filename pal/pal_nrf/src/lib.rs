@@ -37,7 +37,7 @@ pub fn hfosc() -> &'static Clocks<ExternalOscillator, Internal, LfOscStopped> {
     unsafe { HFOSC.as_ref().unwrap() }
 }
 
-const TIMER0_PERIOD_MS: u32 = 10;
+const TIMER0_PERIOD_MS: u32 = 1;
 
 static mut TIMER0: MaybeUninit<TIMER0> = MaybeUninit::uninit();
 #[interrupt]
@@ -71,7 +71,7 @@ pub fn init() {
     let port0 = gpio::p0::Parts::new(periph.P0);
 
     // Initialize timers
-    // set TIMER0 to poll USB every 10 ms
+    // set TIMER0 to poll USB every TIMER0_PERIOD_MS
     let timer0 = periph.TIMER0;
     unsafe {
         TIMER0 = MaybeUninit::new(timer0);
