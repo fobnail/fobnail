@@ -99,8 +99,6 @@ pub fn init() {
 
     unsafe {
         NVIC::unmask(Interrupt::TIMER0);
-        NVIC::unmask(Interrupt::TIMER1);
-        NVIC::unmask(Interrupt::USBD);
     }
 }
 
