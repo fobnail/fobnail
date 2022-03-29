@@ -198,6 +198,7 @@ where
 
 #[derive(Debug, Deserialize, Default)]
 pub struct PcrBank<'a> {
+    pub algo_name: &'a str,
     pub pcrs: u32,
     #[serde(borrow)]
     pub pcr: ArrayOf<'a, &'a serde_bytes::Bytes>,
@@ -272,12 +273,8 @@ impl<'a> Iterator for PcrIterator<'a> {
 #[derive(Debug, Deserialize)]
 pub struct Rim<'a> {
     pub update_ctr: u32,
-    #[serde(borrow, default)]
-    pub sha1: PcrBank<'a>,
-    #[serde(borrow, default)]
-    pub sha256: PcrBank<'a>,
-    #[serde(borrow, default)]
-    pub sha384: PcrBank<'a>,
+    #[serde(borrow)]
+    pub banks: ArrayOf<'a, PcrBank<'a>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -290,13 +287,13 @@ pub struct PersistentRsaKey<'a> {
 
 impl<'a> Rim<'a> {
     pub fn verify(&self) -> Result<(), ()> {
-        Self::do_verify_pcrs(&self.sha1, 20)?;
-        Self::do_verify_pcrs(&self.sha256, 32)?;
-        Self::do_verify_pcrs(&self.sha384, 48)?;
+        for bank in self.banks.iter() {
+            Self::do_verify_pcrs(bank)?;
+        }
         Ok(())
     }
 
-    fn do_verify_pcrs(pcrs: &PcrBank, expected_pcr_len: usize) -> Result<(), ()> {
+    fn do_verify_pcrs(pcrs: &PcrBank) -> Result<(), ()> {
         // pcrs is a bitmask representing which PCRs are present and which are
         // not.
         let n1 = pcrs.pcrs.count_ones() as usize;
@@ -309,6 +306,8 @@ impl<'a> Rim<'a> {
             return Err(());
         }
 
+        // All PCRs in a single bank must have the same size
+        let expected_pcr_len = pcrs.pcr.inner.get(0).map(|x| x.len()).unwrap_or(0);
         for pcr in pcrs.pcr.iter() {
             if pcr.len() != expected_pcr_len {
                 error!(
@@ -363,6 +362,7 @@ mod tests {
         ];
 
         let bank = PcrBank {
+            algo_name: "sha1",
             pcrs: 0x107,
             pcr: ArrayOf {
                 inner: vec![

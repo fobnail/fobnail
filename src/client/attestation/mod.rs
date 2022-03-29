@@ -325,7 +325,7 @@ impl<'a> FobnailClient<'a> {
 
         // very simple test
         // TODO: update_ctr?
-        for (idx, pcr) in &rim.sha1 {
+        /*for (idx, pcr) in &rim.sha1 {
             if let Some(pcr_from_evidence) = evidence.sha1.pcr(idx) {
                 if pcr_from_evidence == pcr {
                     debug!("pcr{:02}: match", idx);
@@ -335,7 +335,7 @@ impl<'a> FobnailClient<'a> {
             } else {
                 error!("pcr{:02}: missing", idx);
             }
-        }
+        }*/
 
         Err(())
     }

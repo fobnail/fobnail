@@ -618,23 +618,9 @@ impl<'a> FobnailClient<'a> {
 
         rim.verify().map_err(|_| error!("RIM is invalid"))?;
 
-        if rim.sha1.pcrs != 0 {
-            info!("sha1:");
-            for (i, pcr) in &rim.sha1 {
-                info!("  pcr{:02}: {}", i, HexFormatter(pcr));
-            }
-        }
-
-        if rim.sha256.pcrs != 0 {
-            info!("sha256:");
-            for (i, pcr) in &rim.sha256 {
-                info!("  pcr{:02}: {}", i, HexFormatter(pcr));
-            }
-        }
-
-        if rim.sha384.pcrs != 0 {
-            info!("sha384:");
-            for (i, pcr) in &rim.sha384 {
+        for bank in rim.banks.iter() {
+            info!("{}:", bank.algo_name);
+            for (i, pcr) in bank {
                 info!("  pcr{:02}: {}", i, HexFormatter(pcr));
             }
         }
