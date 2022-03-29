@@ -17,7 +17,11 @@ use core::mem::MaybeUninit;
 use cortex_m::interrupt::free;
 use hal::clocks::{ExternalOscillator, Internal, LfOscStopped};
 use hal::gpio::{self, Level};
-use hal::pac::{interrupt, Interrupt, NVIC, TIMER0};
+use hal::pac::{
+    interrupt,
+    nvmc::icachecnf::{CACHEEN_A, CACHEPROFEN_A},
+    Interrupt, NVIC, TIMER0,
+};
 use hal::timer::{Instance, Periodic};
 use hal::Clocks;
 use hal::Timer;
@@ -66,6 +70,18 @@ pub fn init() {
 
     let rng = periph.RNG;
     let nvmc = periph.NVMC;
+    nvmc.icachecnf.modify(|_, w| {
+        // Enabling I-Cache can increase overall performance but also can reduce
+        // or avoid halting CPU during NVMC writes - if at time of write CPU
+        // executes from I-Cache it won't be halted.
+        //
+        // Disable cache profiling, right now we are not using it.
+        w.cacheen()
+            .variant(CACHEEN_A::ENABLED)
+            .cacheprofen()
+            .variant(CACHEPROFEN_A::DISABLED)
+    });
+
     unsafe { trussed::drivers::init(rng, nvmc) };
 
     let port0 = gpio::p0::Parts::new(periph.P0);
