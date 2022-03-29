@@ -49,7 +49,8 @@ fn TIMER0() {
         // SAFETY: TIMER0 global must be properly initialized before interrupts
         // are enabled
         let timer0 = unsafe { TIMER0.assume_init_ref() };
-        timer0.timer_start(Timer::<TIMER0, Periodic>::TICKS_PER_SECOND / 1000 * TIMER0_PERIOD_MS);
+        // Clear interrupt flag
+        timer0.as_timer0().events_compare[0].reset();
     })
 }
 
@@ -71,13 +72,11 @@ pub fn init() {
 
     // Initialize timers
     // set TIMER0 to poll USB every 10 ms
-    let timer0 = Timer::periodic(periph.TIMER0).free();
+    let timer0 = periph.TIMER0;
     unsafe {
         TIMER0 = MaybeUninit::new(timer0);
         let timer0 = TIMER0.assume_init_ref();
-        // Periodic mode does not automatically clear counter, which causes timer to
-        // fire immediately after interrupt handler returns
-        timer0.set_oneshot();
+        timer0.set_periodic();
         timer0.enable_interrupt();
         timer0.timer_start(Timer::<TIMER0, Periodic>::TICKS_PER_SECOND / 1000 * TIMER0_PERIOD_MS);
     }
