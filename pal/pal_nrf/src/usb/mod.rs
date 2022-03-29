@@ -52,9 +52,7 @@ pub fn usb_interrupt(cs: &CriticalSection) {
         &mut *(get_eem_driver().borrow(cs) as *const EthernetDriver<_> as *mut EthernetDriver<_>)
     };
 
-    if !usb_dev.poll(&mut [eth]) {
-        return;
-    }
+    while usb_dev.poll(&mut [eth]) {}
 }
 
 pub fn get_eem_driver() -> &'static Mutex<EthernetDriver<'static, Usbd<UsbPeripheral<'static>>>> {

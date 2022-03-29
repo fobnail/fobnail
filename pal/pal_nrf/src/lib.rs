@@ -37,19 +37,45 @@ pub fn hfosc() -> &'static Clocks<ExternalOscillator, Internal, LfOscStopped> {
     unsafe { HFOSC.as_ref().unwrap() }
 }
 
-const TIMER0_PERIOD_MS: u32 = 10;
+const TIMER0_PERIOD_MS: u32 = 1;
 
 static mut TIMER0: MaybeUninit<TIMER0> = MaybeUninit::uninit();
+// when timer0 fired for the last time
+static mut TIMER0_LAST: u64 = 0;
+
 #[interrupt]
 #[allow(non_snake_case)]
 fn TIMER0() {
     free(|cs| {
+        unsafe {
+            let now = timer::get_time_ms() as u64;
+            let delay = now - TIMER0_LAST;
+            let maximum = TIMER0_PERIOD_MS as u64 + 10;
+            if delay > maximum {
+                error!("");
+                error!("");
+                error!("");
+                error!("To big delay between timer0 interrupts (USB may break)");
+                error!(
+                    "delay: {} ms (+{} ms above maximum)",
+                    delay,
+                    delay - maximum
+                );
+                error!("");
+                error!("");
+                error!("");
+            }
+
+            TIMER0_LAST = now;
+        }
+
         usb::usb_interrupt(cs);
 
         // SAFETY: TIMER0 global must be properly initialized before interrupts
         // are enabled
         let timer0 = unsafe { TIMER0.assume_init_ref() };
-        timer0.timer_start(Timer::<TIMER0, Periodic>::TICKS_PER_SECOND / 1000 * TIMER0_PERIOD_MS);
+        // Clear interrupt flag
+        timer0.as_timer0().events_compare[0].reset();
     })
 }
 
@@ -65,19 +91,19 @@ pub fn init() {
 
     let rng = periph.RNG;
     let nvmc = periph.NVMC;
-    unsafe { trussed::drivers::init(rng, nvmc) };
+    unsafe {
+        trussed::drivers::init(rng);
+    }
 
     let port0 = gpio::p0::Parts::new(periph.P0);
 
     // Initialize timers
     // set TIMER0 to poll USB every 10 ms
-    let timer0 = Timer::periodic(periph.TIMER0).free();
+    let timer0 = periph.TIMER0;
     unsafe {
         TIMER0 = MaybeUninit::new(timer0);
         let timer0 = TIMER0.assume_init_ref();
-        // Periodic mode does not automatically clear counter, which causes timer to
-        // fire immediately after interrupt handler returns
-        timer0.set_oneshot();
+        timer0.set_periodic();
         timer0.enable_interrupt();
         timer0.timer_start(Timer::<TIMER0, Periodic>::TICKS_PER_SECOND / 1000 * TIMER0_PERIOD_MS);
     }
@@ -96,12 +122,12 @@ pub fn init() {
         Timer::one_shot(periph.TIMER3),
     );
 
+    trussed::storage_init(nvmc);
+
     usb::init(periph.USBD);
 
     unsafe {
         NVIC::unmask(Interrupt::TIMER0);
-        NVIC::unmask(Interrupt::TIMER1);
-        NVIC::unmask(Interrupt::USBD);
     }
 }
 
