@@ -93,7 +93,8 @@ impl littlefs2::driver::Storage for Flash {
         let mut nvmc = self.nvmc.borrow_mut();
         let off: u32 = off.try_into().unwrap();
         let len: u32 = len.try_into().unwrap();
-        nvmc.erase(off, off + len).unwrap();
+        // Use 1 ms period (the smallest possible value)
+        nvmc.partial_erase(off, off + len, 1).unwrap();
         Ok(len as usize)
     }
 }

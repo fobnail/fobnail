@@ -1,6 +1,6 @@
 [submodule "external/nrf-hal"]
 	path = external/nrf-hal
-	url = https://github.com/nrf-rs/nrf-hal
+	url = https://github.com/fobnail/nrf-hal
 [submodule "external/trussed"]
 	path = external/trussed
 	url = https://github.com/fobnail/trussed
