@@ -82,7 +82,7 @@ pub fn init() {
             .variant(CACHEPROFEN_A::DISABLED)
     });
 
-    unsafe { trussed::drivers::init(rng, nvmc) };
+    unsafe { trussed::drivers::init(rng) };
 
     let port0 = gpio::p0::Parts::new(periph.P0);
 
@@ -110,6 +110,12 @@ pub fn init() {
         Timer::one_shot(periph.TIMER2),
         Timer::one_shot(periph.TIMER3),
     );
+
+    // Initialize Trussed before USB. Trussed formats internal storage which
+    // takes some time, now when we have partial read implemented CPU is halted
+    // max 1 ms during page erases so it shouldn't break USB anymore, but better
+    // be safe.
+    trussed::storage_init(nvmc);
 
     usb::init(periph.USBD);
 

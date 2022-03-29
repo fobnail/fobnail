@@ -2,6 +2,7 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
+use hal::pac::NVMC;
 use littlefs2::path::PathBuf;
 use trussed::{service::SeedableRng, ClientImplementation, Interchange, Service};
 
@@ -31,13 +32,22 @@ impl trussed::platform::Syscall for Syscall {
     }
 }
 
+static mut STORE: Option<store::Store> = None;
+
+pub(crate) fn storage_init(nvmc: NVMC) {
+    unsafe {
+        let store = store::init(nvmc);
+        STORE = Some(store);
+    }
+}
+
 /// Initialize Trussed platform and create clients.
 pub fn init(client_names: &[&str]) -> Vec<ClientImplementation<Syscall>> {
-    let drivers::Drivers { rng, nvmc } = unsafe { drivers::get() };
+    let drivers::Drivers { rng } = unsafe { drivers::get() };
     let rng = hal::Rng::new(rng);
 
     let rng = chacha20::ChaCha8Rng::from_rng(rng).unwrap();
-    let store = unsafe { store::init(nvmc) };
+    let store = unsafe { STORE.take().unwrap() };
     let ui = UserInterface;
     let platform = Platform::new(rng, store, ui);
     let service = Rc::new(RefCell::new(Service::new(platform)));
