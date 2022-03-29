@@ -1,12 +1,8 @@
-use core::borrow::Borrow;
 use core::cell::RefCell;
 use core::convert::TryInto;
-use core::mem::MaybeUninit;
 use core::time::Duration;
 
 use cortex_m::interrupt::{self, Mutex};
-use cortex_m::prelude::_embedded_hal_blocking_delay_DelayMs;
-use hal::pac::timer3::shorts::SHORTS_SPEC;
 use hal::pac::{TIMER2, TIMER3};
 use hal::timer::OneShot;
 

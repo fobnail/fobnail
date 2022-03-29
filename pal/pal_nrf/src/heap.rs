@@ -55,7 +55,7 @@ fn oom_handler(layout: Layout) -> ! {
 }
 
 pub fn init() {
-    const HEAP_SIZE: usize = 16384;
+    const HEAP_SIZE: usize = 65536;
 
     let base = cortex_m_rt::heap_start();
     unsafe { ALLOCATOR.init(base as usize, HEAP_SIZE) };
