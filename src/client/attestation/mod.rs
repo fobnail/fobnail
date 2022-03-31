@@ -1,7 +1,7 @@
 use core::cell::RefCell;
 
 use alloc::rc::Rc;
-use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
+use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
@@ -55,18 +55,36 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
-            State::RequestMetadata { request_pending } => {
+            State::Init => {
+                let mut trussed = self.trussed.borrow_mut();
+                *state = State::RequestMetadata {
+                    request_pending: false,
+                    nonce: signing::generate_nonce(*trussed),
+                }
+            }
+            State::RequestMetadata {
+                request_pending,
+                nonce,
+            } => {
                 if !*request_pending {
                     *request_pending = true;
+
                     let mut request = coap_lite::CoapRequest::new();
                     request.set_path("/metadata");
                     request.set_method(RequestType::Fetch);
+                    let encoded =
+                        trussed::cbor_serialize_bytes::<_, 512>(&proto::Nonce::new(nonce)).unwrap();
+                    request.message.payload = encoded.to_vec();
+                    request
+                        .message
+                        .set_content_format(ContentFormat::ApplicationCBOR);
+
                     let state = Rc::clone(&self.state);
                     self.coap_client
                         .queue_request(request, move |result| Self::handle_response(result, state));
                 }
             }
-            State::LoadAik { metadata } => {
+            State::LoadAik { metadata, nonce } => {
                 let mut trussed = self.trussed.borrow_mut();
                 match signing::hash_signed_object(*trussed, metadata.as_slice()) {
                     Ok(hash) => match Self::load_aik(*trussed, hash.as_slice()) {
@@ -75,8 +93,9 @@ impl<'a> FobnailClient<'a> {
                                 *trussed,
                                 metadata.as_slice(),
                                 &aik,
+                                nonce,
                             ) {
-                                Ok((meta, _, _)) => {
+                                Ok((meta, _)) => {
                                     info!("Attesting platform:");
                                     info!("  MAC          : {}", meta.mac);
                                     info!("  Manufacturer : {}", meta.manufacturer);
@@ -120,7 +139,7 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             },
-            State::Idle { .. } | State::LoadAik { .. } => {
+            State::Init | State::Idle { .. } | State::LoadAik { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -142,10 +161,11 @@ impl<'a> FobnailClient<'a> {
         }
 
         match state {
-            State::RequestMetadata { .. } => {
+            State::RequestMetadata { nonce, .. } => {
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
                     *state = State::LoadAik {
                         metadata: result.payload,
+                        nonce: *nonce,
                     }
                 } else {
                     error!("Server gave invalid response to metadata request");
