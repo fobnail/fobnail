@@ -70,7 +70,26 @@ impl<'a> FobnailClient<'a> {
                 let mut trussed = self.trussed.borrow_mut();
                 match signing::hash_signed_object(*trussed, metadata.as_slice()) {
                     Ok(hash) => match Self::load_aik(*trussed, hash.as_slice()) {
-                        Ok(_aik) => todo!(),
+                        Ok(aik) => {
+                            match signing::decode_signed_object::<_, proto::Metadata>(
+                                *trussed,
+                                metadata.as_slice(),
+                                &aik,
+                            ) {
+                                Ok((meta, _, _)) => {
+                                    info!("Attesting platform:");
+                                    info!("  MAC          : {}", meta.mac);
+                                    info!("  Manufacturer : {}", meta.manufacturer);
+                                    info!("  Product      : {}", meta.product_name);
+                                    info!("  Serial       : {}", meta.serial_number);
+                                    todo!()
+                                }
+                                Err(()) => {
+                                    error!("Request was not signed with proper AIK, did the AIK change?");
+                                    state.error();
+                                }
+                            }
+                        }
                         Err(()) => {
                             error!("Could not load AIK");
                             state.error()
