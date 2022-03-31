@@ -196,9 +196,68 @@ where
     }
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug)]
+#[repr(u32)]
+pub enum PcrAlgo {
+    Sha1,
+    Sha256,
+    Sha384,
+    Sha512,
+    Unknown(u32),
+}
+
+impl From<u32> for PcrAlgo {
+    fn from(x: u32) -> Self {
+        match x {
+            0x04 => Self::Sha1,
+            0x0b => Self::Sha256,
+            0x0c => Self::Sha384,
+            0x0d => Self::Sha512,
+            _ => Self::Unknown(x),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PcrAlgo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = PcrAlgo;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an integer")
+            }
+
+            fn visit_u32<E>(self, v: u32) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(PcrAlgo::from(v))
+            }
+        }
+
+        deserializer.deserialize_u32(Visitor)
+    }
+}
+
+impl fmt::Display for PcrAlgo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sha1 => write!(f, "sha1"),
+            Self::Sha256 => write!(f, "sha256"),
+            Self::Sha384 => write!(f, "sha384"),
+            Self::Sha512 => write!(f, "sha512"),
+            Self::Unknown(u) => write!(f, "unknown (0x{:x})", u),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PcrBank<'a> {
-    pub algo_name: &'a str,
+    pub algo_id: PcrAlgo,
     pub pcrs: u32,
     #[serde(borrow)]
     pub pcr: ArrayOf<'a, &'a serde_bytes::Bytes>,
@@ -339,7 +398,7 @@ impl<'a> Rim<'a> {
 mod tests {
     use core::marker::PhantomData;
 
-    use super::{ArrayOf, PcrBank};
+    use super::{ArrayOf, PcrAlgo, PcrBank};
 
     #[test]
     fn test_pcr_bank_get() {
@@ -361,7 +420,7 @@ mod tests {
         ];
 
         let bank = PcrBank {
-            algo_name: "sha1",
+            algo_id: PcrAlgo::Sha1,
             pcrs: 0x107,
             pcr: ArrayOf {
                 inner: vec![
