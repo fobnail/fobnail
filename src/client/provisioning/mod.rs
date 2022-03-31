@@ -626,7 +626,7 @@ impl<'a> FobnailClient<'a> {
         rim.verify().map_err(|_| error!("RIM is invalid"))?;
 
         for bank in rim.banks.iter() {
-            info!("{}:", bank.algo_name);
+            info!("{}:", bank.algo_id);
             for (i, pcr) in bank {
                 info!("  pcr{:02}: {}", i, HexFormatter(pcr));
             }
