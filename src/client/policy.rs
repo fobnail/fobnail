@@ -1,5 +1,8 @@
+use serde::Serialize;
+
 use super::proto::PcrAlgo;
 
+#[derive(Serialize, Copy, Clone)]
 pub struct Bank {
     /// PCR bank algorithm, e.g. sha1, sha256 ...
     pub algo_id: PcrAlgo,

@@ -196,7 +196,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 #[repr(u32)]
 pub enum PcrAlgo {
     Sha1,
@@ -208,12 +208,27 @@ pub enum PcrAlgo {
 
 impl From<u32> for PcrAlgo {
     fn from(x: u32) -> Self {
+        // FIXME: due to https://github.com/rust-lang/rust/issues/60553 we map
+        // identity map raw values into corresponding enum constants. Rust if free
+        // to assign any discrimant to each variant.
         match x {
             0x04 => Self::Sha1,
             0x0b => Self::Sha256,
             0x0c => Self::Sha384,
             0x0d => Self::Sha512,
             _ => Self::Unknown(x),
+        }
+    }
+}
+
+impl From<PcrAlgo> for u32 {
+    fn from(x: PcrAlgo) -> Self {
+        match x {
+            PcrAlgo::Sha1 => 0x04,
+            PcrAlgo::Sha256 => 0x0b,
+            PcrAlgo::Sha384 => 0x0c,
+            PcrAlgo::Sha512 => 0x0d,
+            PcrAlgo::Unknown(x) => x,
         }
     }
 }
@@ -240,6 +255,15 @@ impl<'de> serde::Deserialize<'de> for PcrAlgo {
         }
 
         deserializer.deserialize_u32(Visitor)
+    }
+}
+
+impl serde::Serialize for PcrAlgo {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u32((*self).into())
     }
 }
 
@@ -392,6 +416,13 @@ impl<'a> Rim<'a> {
 
         Ok(())
     }
+}
+
+#[derive(Serialize)]
+pub struct QuoteRequest<'a> {
+    #[serde(flatten)]
+    pub nonce: Nonce<'a>,
+    pub banks: &'a [super::policy::Bank],
 }
 
 #[cfg(test)]
