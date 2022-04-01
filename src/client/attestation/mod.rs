@@ -85,7 +85,7 @@ impl<'a> FobnailClient<'a> {
                                     todo!()
                                 }
                                 Err(()) => {
-                                    error!("Request was not signed with proper AIK, did the AIK change?");
+                                    error!("Metadata was not signed with proper AIK, did the AIK change?");
                                     state.error();
                                 }
                             }
