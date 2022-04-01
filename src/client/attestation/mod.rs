@@ -157,12 +157,20 @@ impl<'a> FobnailClient<'a> {
             State::RequestEvidence {
                 request_pending,
                 nonce,
+                policy,
                 ..
             } => {
                 if !*request_pending {
                     *request_pending = true;
 
-                    coap_request!(RequestType::Post, "/quote", &proto::Nonce::new(&nonce[..]));
+                    coap_request!(
+                        RequestType::Post,
+                        "/quote",
+                        &proto::QuoteRequest {
+                            nonce: proto::Nonce::new(&nonce[..]),
+                            banks: policy.banks
+                        }
+                    );
                 }
             }
             State::VerifyEvidence {
