@@ -14,6 +14,7 @@ use super::{
     policy::Policy,
     proto,
     signing::{self, generate_nonce},
+    tpm,
     util::{handle_server_error_response, HexFormatter},
 };
 use crate::{
@@ -333,17 +334,22 @@ impl<'a> FobnailClient<'a> {
     }
 
     fn verify_evidence<T>(
-        _trussed: &mut T,
-        _nonce: &[u8],
+        trussed: &mut T,
+        nonce: &[u8],
         rim: &[u8],
-        _evidence: &[u8],
-        _aik: &Rc<crypto::Key>,
+        evidence: &[u8],
+        aik: &Rc<crypto::Key>,
         _policy: &Policy,
     ) -> Result<(), ()>
     where
         T: trussed::client::CryptoClient,
     {
         // Load and verify integrity of RIM stored in internal memory.
+        // TODO: ideally we would do all verification during deserialize stage
+        // but serde doesn't allow this currently (at least not easily), also
+        // validity of one field may depend on another field which brings more
+        // problems.
+        // https://github.com/serde-rs/serde/issues/939
         let rim = trussed::cbor_deserialize::<proto::Rim>(rim).map_err(|e| {
             error!("Failed to deserialize RIM from internal storage: {}", e);
             error!("RIM is corrupted, please re-provision your platform");
@@ -351,6 +357,18 @@ impl<'a> FobnailClient<'a> {
         rim.verify().map_err(|_| {
             error!("RIM is corrupted, please re-provision your platform");
         })?;
+
+        // Nonce is inside TPMS_ATTEST structure, not here
+        let evidence = signing::verify_signed_object(trussed, evidence, aik, &[])
+            .map_err(|_| {
+                error!("Evidence has invalid signature");
+            })
+            .and_then(|e| tpm::mu::Quote::decode(e))?;
+
+        if evidence.extra_data != nonce {
+            error!("Evidence nonce is invalid");
+            return Err(());
+        }
 
         todo!("Evidence verification not implemented");
     }

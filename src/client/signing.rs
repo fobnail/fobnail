@@ -7,16 +7,15 @@ use trussed::types::Mechanism;
 
 pub const NONCE_SIZE: usize = 32;
 
-/// Verifies signature and decodes a CBOR-encoded object if signature is valid.
-pub fn decode_signed_object<'a: 'de, 'de, S, T>(
-    trussed: &mut S,
+/// Verifies signature and returns contained raw data if signature is valid.
+pub fn verify_signed_object<'a, T>(
+    trussed: &mut T,
     data: &'a [u8],
     signing_key: &crypto::Key,
     nonce: &[u8],
-) -> Result<(T, &'a [u8]), ()>
+) -> Result<&'a [u8], ()>
 where
-    S: trussed::client::CryptoClient,
-    T: Deserialize<'de> + 'a,
+    T: trussed::client::CryptoClient,
 {
     let signed_object = trussed::cbor_deserialize::<SignedObject>(data).map_err(|e| {
         error!("Failed to deserialize signed object (outer): {}", e);
@@ -44,17 +43,7 @@ where
                 &sha.hash,
                 signed_object.signature,
             ) {
-                Ok(()) => {
-                    let inner_object =
-                        trussed::cbor_deserialize::<T>(signed_object.data).map_err(|e| {
-                            error!(
-                                "Failed to deserialize inner object ({}): {}",
-                                type_name::<T>(),
-                                e
-                            )
-                        })?;
-                    Ok((inner_object, signed_object.data))
-                }
+                Ok(()) => Ok(signed_object.data),
                 Err(e) => {
                     error!("Signature verification failed: {}", e);
                     Err(())
@@ -62,6 +51,28 @@ where
             }
         }
     }
+}
+
+/// Verifies signature and decodes a CBOR-encoded object if signature is valid.
+pub fn decode_signed_object<'a: 'de, 'de, S, T>(
+    trussed: &mut S,
+    data: &'a [u8],
+    signing_key: &crypto::Key,
+    nonce: &[u8],
+) -> Result<(T, &'a [u8]), ()>
+where
+    S: trussed::client::CryptoClient,
+    T: Deserialize<'de> + 'a,
+{
+    let data = verify_signed_object(trussed, data, signing_key, nonce)?;
+    let inner_object = trussed::cbor_deserialize::<T>(data).map_err(|e| {
+        error!(
+            "Failed to deserialize inner object ({}): {}",
+            type_name::<T>(),
+            e
+        )
+    })?;
+    Ok((inner_object, data))
 }
 
 /// Computes SHA-256 hash of inner object
