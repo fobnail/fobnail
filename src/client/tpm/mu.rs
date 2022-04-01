@@ -1,5 +1,8 @@
 use alloc::vec::Vec;
 
+pub use crate::client::policy::Bank;
+use crate::client::proto::PcrAlgo;
+
 macro_rules! decode {
     ($cursor:expr, $data:expr, [u8]) => {{
         let array_len = decode!($cursor, $data, u16);
@@ -292,5 +295,81 @@ impl<'a> Public<'a> {
                 Err(())
             }
         }
+    }
+}
+
+pub struct Quote<'a> {
+    pub extra_data: &'a [u8],
+    pub safe: u8,
+    pub banks: Vec<Bank>,
+    pub digest: &'a [u8],
+}
+
+impl<'a> Quote<'a> {
+    pub fn decode(data: &'a [u8]) -> Result<Self, ()> {
+        const TPM2_ST_ATTEST_QUOTE: u16 = 0x8018;
+
+        let mut cursor = 0;
+        let magic = decode!(cursor, data, u32);
+        ensure!(
+            magic == u32::from_be_bytes(*b"\xFFTCG"),
+            "Invalid TPMS_ATTEST magic"
+        );
+        let attest_type = decode!(cursor, data, u16);
+        ensure!(
+            attest_type == TPM2_ST_ATTEST_QUOTE,
+            "Invalid attest type (expected TPM2_ST_ATTEST_QUOTE, got {})",
+            attest_type
+        );
+        let _qualified_signer = decode!(cursor, data, [u8]);
+        let extra_data = decode!(cursor, data, [u8]);
+        let _clock = decode!(cursor, data, u64);
+        let _reset_count = decode!(cursor, data, u32);
+        let _restart_count = decode!(cursor, data, u32);
+        let safe = decode!(cursor, data, u8);
+        let _fw_version = decode!(cursor, data, u64);
+
+        let pcr_selection_count = decode!(cursor, data, u32);
+        let mut banks = Vec::with_capacity(pcr_selection_count as usize);
+
+        for _ in 0..pcr_selection_count {
+            let algo_id = PcrAlgo::from(decode!(cursor, data, u16));
+            // Array have different size field (u8 instead of u16) so we can't
+            // use decode!(cursor, data, [u8])
+            let sizeof_select = decode!(cursor, data, u8);
+            ensure!(
+                sizeof_select <= 4,
+                "PCR select is too big (expected at most 4 bytes, got {})",
+                sizeof_select
+            );
+
+            let pcr_select = if sizeof_select > 0 {
+                let pcr_select_a = data
+                    .get(cursor..cursor + sizeof_select as usize)
+                    .ok_or_else(|| error!("Data truncated"))?;
+
+                let mut pcr_select_s = [0u8; 4];
+                if !pcr_select_a.is_empty() {
+                    pcr_select_s[..pcr_select_a.len()].copy_from_slice(pcr_select_a)
+                }
+                cursor += sizeof_select as usize;
+                u32::from_le_bytes(pcr_select_s)
+            } else {
+                0
+            };
+
+            banks.push(Bank {
+                algo_id,
+                pcrs: pcr_select,
+            })
+        }
+        let digest = decode!(cursor, data, [u8]);
+
+        Ok(Self {
+            extra_data,
+            banks,
+            safe,
+            digest,
+        })
     }
 }
