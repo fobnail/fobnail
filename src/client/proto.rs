@@ -218,8 +218,7 @@ pub struct Rim<'a> {
 pub struct PersistentRsaKey<'a> {
     #[serde(with = "serde_bytes")]
     pub n: &'a [u8],
-    #[serde(with = "serde_bytes")]
-    pub e: &'a [u8],
+    pub e: u32,
 }
 
 #[derive(Debug, Serialize)]

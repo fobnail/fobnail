@@ -194,7 +194,7 @@ impl<'a> FobnailClient<'a> {
             error!("AIK is corrupted, please re-provision your platform");
         })?;
 
-        crypto::RsaKey::load2(n, e)
+        crypto::RsaKey::load(n, e)
             .map(crypto::Key::Rsa)
             .map_err(|_| {
                 error!("AIK is corrupted, please re-provision your platform");

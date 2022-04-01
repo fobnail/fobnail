@@ -563,9 +563,16 @@ impl<'a> FobnailClient<'a> {
 
         let serialized = match aik_pubkey.as_ref() {
             crypto::Key::Rsa(rsa) => {
+                let e_v = rsa.inner.e().to_bytes_be();
+                let mut e_a = [0u8; 4];
+                if !e_v.is_empty() {
+                    e_a[4 - e_v.len()..].copy_from_slice(&e_v);
+                }
+                let e = u32::from_be_bytes(e_a);
+
                 let key = proto::PersistentRsaKey {
                     n: &rsa.inner.n().to_bytes_be()[..],
-                    e: &rsa.inner.e().to_bytes_be()[..],
+                    e,
                 };
                 trussed::cbor_serialize_bytes::<_, MAX_MESSAGE_LENGTH>(&key).unwrap()
             }
