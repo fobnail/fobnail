@@ -25,8 +25,11 @@ where
     // We expect SHA256 for RSA and SHA512 for Ed25519
     match signing_key {
         crypto::Key::Rsa(key) => {
-            let mut data_to_hash = trussed::Bytes::from_slice(signed_object.data).unwrap();
-            data_to_hash.extend_from_slice(nonce).unwrap();
+            let mut data_to_hash = trussed::Bytes::from_slice(signed_object.data)
+                .map_err(|_| error!("Data is too big and cannot be hashed"))?;
+            data_to_hash
+                .extend_from_slice(nonce)
+                .map_err(|_| error!("Data is too big and cannot be hashed"))?;
 
             let sha = trussed::try_syscall!(trussed.hash(Mechanism::Sha256, data_to_hash))
                 .map_err(|e| {
