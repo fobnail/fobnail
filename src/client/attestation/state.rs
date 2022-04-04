@@ -2,7 +2,6 @@ use alloc::{rc::Rc, vec::Vec};
 use core::fmt;
 
 use super::{crypto::Key, signing::Nonce, Policy};
-use pal::timer::get_time_ms;
 
 pub enum State {
     /// Generate nonce and transition to RequestMetadata. We need this state
@@ -35,13 +34,22 @@ pub enum State {
 
     /// Idle state with optional timeout. After timeout resets into Init state.
     Idle { timeout: Option<u64> },
+
+    /// Triggered when attestation is completed, either successfully or with
+    /// failure. This state is responsible for signalling attestation result
+    /// using LED.
+    Completion {
+        attestation_success: bool,
+        timeout: u64,
+    },
 }
 
 impl State {
     /// Transition into error state.
     pub fn error(&mut self) {
-        *self = Self::Idle {
-            timeout: Some(get_time_ms() as u64 + 5000),
+        *self = Self::Completion {
+            attestation_success: false,
+            timeout: 0,
         }
     }
 }
@@ -61,6 +69,7 @@ impl fmt::Display for State {
             Self::RequestEvidence { .. } => write!(f, "request evidence"),
             Self::VerifyEvidence { .. } => write!(f, "verify evidence"),
             Self::Idle { .. } => write!(f, "idle"),
+            Self::Completion { .. } => write!(f, "completion"),
         }
     }
 }

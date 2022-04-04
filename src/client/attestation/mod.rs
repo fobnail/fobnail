@@ -2,7 +2,10 @@ use core::cell::RefCell;
 
 use alloc::{rc::Rc, vec::Vec};
 use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
-use pal::timer::get_time_ms;
+use pal::{
+    led::{self, Led},
+    timer::get_time_ms,
+};
 use sha2::Digest;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
@@ -88,6 +91,25 @@ impl<'a> FobnailClient<'a> {
                     if get_time_ms() as u64 > *timeout {
                         *state = State::default();
                     }
+                }
+            }
+            State::Completion {
+                attestation_success,
+                timeout,
+            } => {
+                let l = if *attestation_success {
+                    Led::Green
+                } else {
+                    Led::Red
+                };
+
+                if *timeout == 0 {
+                    led::control(l, true);
+                    // Wait for ten seconds before turning LED off
+                    *timeout = get_time_ms() as u64 + 10000;
+                } else if get_time_ms() as u64 > *timeout {
+                    led::control(l, false);
+                    *state = State::Idle { timeout: None };
                 }
             }
             State::Init => {
@@ -192,7 +214,10 @@ impl<'a> FobnailClient<'a> {
 
                         // Currently attestation is run only once when Fobnail
                         // is plugged into USB.
-                        *state = State::Idle { timeout: None }
+                        *state = State::Completion {
+                            attestation_success: true,
+                            timeout: 0,
+                        }
                     }
                     Err(()) => {
                         error!("Attestation failed");
@@ -201,7 +226,7 @@ impl<'a> FobnailClient<'a> {
 
                         // Currently attestation is run only once when Fobnail
                         // is plugged into USB.
-                        *state = State::Idle { timeout: None }
+                        state.error();
                     }
                 }
             }
@@ -227,7 +252,8 @@ impl<'a> FobnailClient<'a> {
             State::Init
             | State::Idle { .. }
             | State::LoadAik { .. }
-            | State::VerifyEvidence { .. } => {
+            | State::VerifyEvidence { .. }
+            | State::Completion { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
