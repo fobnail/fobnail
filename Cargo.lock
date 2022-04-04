@@ -1060,6 +1060,7 @@ dependencies = [
  "trussed",
  "usb-device",
  "usbd-ethernet",
+ "void",
 ]
 
 [[package]]

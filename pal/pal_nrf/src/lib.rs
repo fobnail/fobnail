@@ -28,7 +28,7 @@ use hal::Timer;
 
 pub mod ethernet;
 mod heap;
-mod led;
+pub mod led;
 mod logger;
 mod panic;
 pub mod timer;
@@ -97,11 +97,10 @@ pub fn init() {
         timer0.timer_start(Timer::<TIMER0, Periodic>::TICKS_PER_SECOND / 1000 * TIMER0_PERIOD_MS);
     }
 
-    // set TIMER1 to blink leds every 1 second
+    // initialize LEDs
     led::init(
-        periph.TIMER1,
-        port0.p0_06.into_push_pull_output(Level::Low),
-        port0.p0_08.into_push_pull_output(Level::Low),
+        port0.p0_06.into_push_pull_output(Level::High),
+        port0.p0_08.into_push_pull_output(Level::High),
     );
 
     // configure TIMER2 to be used for delays

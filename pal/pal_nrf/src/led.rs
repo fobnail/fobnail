@@ -1,31 +1,65 @@
+use cortex_m::interrupt::{free, Mutex};
 use hal::{
-    pac::{interrupt, TIMER1},
-    prelude::*,
+    gpio::{
+        p0::{P0_06, P0_08},
+        Output, PushPull,
+    },
+    prelude::OutputPin,
 };
+use void::Void;
 
-#[interrupt]
-#[allow(non_snake_case)]
-fn TIMER1() {}
+pub(crate) type GreenPin = P0_06<Output<PushPull>>;
+pub(crate) type RedPin = P0_08<Output<PushPull>>;
 
-pub fn init<G, R>(_timer1: TIMER1, _green: G, _red: R)
-where
-    G: OutputPin,
-    R: OutputPin,
-{
-    /*let port0 = hal::gpio::p0::Parts::new(periph.P0);
-    let mut timer: Timer<hal::pac::TIMER0, hal::timer::Periodic> = Timer::periodic(periph.TIMER0);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Led {
+    Green,
+    Red,
+}
 
-    // Power on LEDs (active-low)
-    let mut green_led = port0.p0_06.into_push_pull_output(Level::Low);
-    let mut red_led = port0.p0_08.into_push_pull_output(Level::Low);
+struct Driver {
+    green: GreenPin,
+    red: RedPin,
+}
 
-    loop {
-        // Blink with 1 second intervals
-        timer.delay(Timer::<hal::pac::TIMER0, hal::timer::Periodic>::TICKS_PER_SECOND);
-        green_led.set_high().unwrap();
-        red_led.set_high().unwrap();
-        timer.delay(Timer::<hal::pac::TIMER0, hal::timer::Periodic>::TICKS_PER_SECOND);
-        green_led.set_low().unwrap();
-        red_led.set_low().unwrap();
-    }*/
+impl Driver {
+    fn led(&mut self, led: Led) -> &mut dyn OutputPin<Error = Void> {
+        match led {
+            Led::Green => &mut self.green,
+            Led::Red => &mut self.red,
+        }
+    }
+}
+
+static mut DRIVER: Option<Mutex<Driver>> = None;
+
+pub(crate) fn init(green: GreenPin, red: RedPin) {
+    let driver = Driver { green, red };
+    unsafe { DRIVER = Some(Mutex::new(driver)) }
+}
+
+pub fn control(led: Led, on: bool) {
+    free(|cs| {
+        // SAFETY: see notes in ethernet.rs
+        unsafe fn into_mutable_ref<T>(r: &T) -> &mut T {
+            &mut *(r as *const T as *mut T)
+        }
+
+        // SAFETY: DRIVER is modified only once during initialization
+        let driver = unsafe {
+            into_mutable_ref(
+                DRIVER
+                    .as_ref()
+                    .expect("control() called without an active driver")
+                    .borrow(cs),
+            )
+        };
+
+        let pin = driver.led(led);
+        if on {
+            pin.set_low().unwrap();
+        } else {
+            pin.set_high().unwrap();
+        }
+    })
 }

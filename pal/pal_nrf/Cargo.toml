@@ -29,6 +29,10 @@ chacha20 = { version = "0.8", features = ["rng"] }
 littlefs2 = "0.3"
 embedded-storage = "0.3"
 
+# void type, this is a relict of the past from the time when Rust didn't have
+# ! type, nRF hal still uses this
+void = { version = "1", default-features = false }
+
 # Must be kept in sync with pal_nrf and pal_pc
 [dependencies.trussed]
 path = "../../external/trussed"
