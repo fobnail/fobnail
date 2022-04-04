@@ -3,6 +3,7 @@ use core::cell::RefCell;
 use alloc::{rc::Rc, vec::Vec};
 use coap_lite::{ContentFormat, MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
+use sha2::Digest;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use trussed::{
     api::reply::ReadFile,
@@ -184,15 +185,23 @@ impl<'a> FobnailClient<'a> {
                 let mut trussed = self.trussed.borrow_mut();
                 match Self::verify_evidence(*trussed, nonce, rim, evidence, aik_pubkey, policy) {
                     Ok(()) => {
-                        info!("Attestation complete");
+                        info!("Attestation successful");
                         // TODO: should clearly notify user that attestation is
                         // successful
                         // On real hardware this will be a green LED
+
+                        // Currently attestation is run only once when Fobnail
+                        // is plugged into USB.
+                        *state = State::Idle { timeout: None }
                     }
                     Err(()) => {
+                        error!("Attestation failed");
                         // TODO: should clearly notify user that attestation has
                         // failed (red LED)
-                        state.error()
+
+                        // Currently attestation is run only once when Fobnail
+                        // is plugged into USB.
+                        *state = State::Idle { timeout: None }
                     }
                 }
             }
@@ -339,7 +348,7 @@ impl<'a> FobnailClient<'a> {
         rim: &[u8],
         evidence: &[u8],
         aik: &Rc<crypto::Key>,
-        _policy: &Policy,
+        policy: &Policy,
     ) -> Result<(), ()>
     where
         T: trussed::client::CryptoClient,
@@ -363,13 +372,112 @@ impl<'a> FobnailClient<'a> {
             .map_err(|_| {
                 error!("Evidence has invalid signature");
             })
-            .and_then(|e| tpm::mu::Quote::decode(e))?;
+            .and_then(tpm::mu::Quote::decode)?;
 
-        if evidence.extra_data != nonce {
+        let tpm::mu::Quote {
+            extra_data,
+            safe,
+            banks,
+            digest,
+        } = evidence;
+
+        if extra_data != nonce {
             error!("Evidence nonce is invalid");
             return Err(());
         }
 
-        todo!("Evidence verification not implemented");
+        if safe == 0 {
+            error!("TPM clock is not safe");
+            return Err(());
+        }
+
+        // Step 1: check if evidence contains bank that we did not request
+        for bank in &banks {
+            policy
+                .banks
+                .iter()
+                .find(|x| bank.algo_id == x.algo_id)
+                .ok_or_else(|| error!("Evidence contains bank we didn't request"))?;
+        }
+
+        // Step 2: check if evidence contains all banks we are interested in.
+        // Check whether selected PCRs match policy's PCR selection.
+        for bank in policy.banks {
+            banks
+                .iter()
+                .find(|x| x.algo_id == bank.algo_id)
+                .ok_or_else(|| {
+                    error!(
+                        "Required PCR bank ({}) not provided in evidence",
+                        bank.algo_id
+                    )
+                })
+                .and_then(|x| {
+                    if bank.pcrs == x.pcrs {
+                        Ok(())
+                    } else {
+                        error!("Attester provided evidence with wrong PCR select");
+                        error!("expected 0x{:08x} got 0x{:08x}", bank.pcrs, x.pcrs);
+                        Err(())
+                    }
+                })?;
+        }
+
+        // Don't use Trussed here. Trussed doesn't provide update() method so we
+        // would have to merge all PCRs into continuous memory region
+        // TODO: move to Trussed when it gains required APIs
+        let mut hasher = if digest.len() == 32 {
+            // assume SHA-256
+            sha2::Sha256::new()
+        } else {
+            error!("Unsupported hash algorithm for TPM quote");
+            return Err(());
+        };
+
+        // Step 3: Hash PCRs required by policy.
+        //
+        // Attester must hash PCR banks in the order defined by policy. PCRs
+        // itself are always hashed starting with the lowest selected PCR.
+        for bank in policy.banks {
+            // Policy contains information about what we want to verify, actual
+            // PCRs we need to load from RIM
+            let bank_rim = rim
+                .banks
+                .inner
+                .iter()
+                .find(|x| x.algo_id == bank.algo_id)
+                .ok_or_else(|| {
+                    error!("RIM is missing required bank {}", bank.algo_id);
+                    error!("This may be caused by platform's TPM lacking PCR bank required by the current policy");
+                })?;
+
+            let mut hashed_pcrs = 0u32;
+            for (i, pcr) in bank_rim {
+                if bank.pcrs & (1 << i) == 0 {
+                    continue;
+                }
+
+                hasher.update(pcr);
+                hashed_pcrs |= 1 << i;
+            }
+
+            // Check whether all PCRs required by policy are present.
+            if hashed_pcrs != bank.pcrs {
+                error!(
+                    "RIM is missing required set of PCRs from bank {}",
+                    bank.algo_id
+                );
+                return Err(());
+            }
+        }
+
+        // Step 4: compare hashes
+        let pcr_digest_from_rim = hasher.finalize();
+        if &pcr_digest_from_rim[..] == digest {
+            Ok(())
+        } else {
+            error!("PCRs don't match");
+            Err(())
+        }
     }
 }
