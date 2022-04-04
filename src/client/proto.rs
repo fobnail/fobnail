@@ -197,19 +197,19 @@ where
 }
 
 #[derive(Debug, Copy, Clone)]
-#[repr(u32)]
+#[repr(u16)]
 pub enum PcrAlgo {
     Sha1,
     Sha256,
     Sha384,
     Sha512,
-    Unknown(u32),
+    Unknown(u16),
 }
 
-impl From<u32> for PcrAlgo {
-    fn from(x: u32) -> Self {
+impl From<u16> for PcrAlgo {
+    fn from(x: u16) -> Self {
         // FIXME: due to https://github.com/rust-lang/rust/issues/60553 we map
-        // identity map raw values into corresponding enum constants. Rust if free
+        // identity map raw values into corresponding enum constants. Rust is free
         // to assign any discrimant to each variant.
         match x {
             0x04 => Self::Sha1,
@@ -221,7 +221,7 @@ impl From<u32> for PcrAlgo {
     }
 }
 
-impl From<PcrAlgo> for u32 {
+impl From<PcrAlgo> for u16 {
     fn from(x: PcrAlgo) -> Self {
         match x {
             PcrAlgo::Sha1 => 0x04,
@@ -246,7 +246,7 @@ impl<'de> serde::Deserialize<'de> for PcrAlgo {
                 formatter.write_str("an integer")
             }
 
-            fn visit_u32<E>(self, v: u32) -> Result<Self::Value, E>
+            fn visit_u16<E>(self, v: u16) -> Result<Self::Value, E>
             where
                 E: serde::de::Error,
             {
@@ -254,7 +254,7 @@ impl<'de> serde::Deserialize<'de> for PcrAlgo {
             }
         }
 
-        deserializer.deserialize_u32(Visitor)
+        deserializer.deserialize_u16(Visitor)
     }
 }
 
@@ -263,7 +263,7 @@ impl serde::Serialize for PcrAlgo {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_u32((*self).into())
+        serializer.serialize_u16((*self).into())
     }
 }
 
@@ -274,7 +274,7 @@ impl fmt::Display for PcrAlgo {
             Self::Sha256 => write!(f, "sha256"),
             Self::Sha384 => write!(f, "sha384"),
             Self::Sha512 => write!(f, "sha512"),
-            Self::Unknown(u) => write!(f, "unknown (0x{:x})", u),
+            Self::Unknown(u) => write!(f, "unknown (0x{:04x})", u),
         }
     }
 }
