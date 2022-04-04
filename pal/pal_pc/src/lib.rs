@@ -1,6 +1,7 @@
 use std::thread::yield_now;
 
 pub mod ethernet;
+pub mod led;
 pub mod timer;
 pub mod trussed;
 
