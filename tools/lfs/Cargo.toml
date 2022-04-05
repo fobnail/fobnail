@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "3", features = ["derive"] }
-littlefs2 = "0.3"
+littlefs2 = { git = "https://github.com/fobnail/littlefs2", branch = "upstream-v2.4.2" }
 anyhow = "1"
 x509-parser = "0.13"
 pem = "1"
