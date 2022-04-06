@@ -149,7 +149,7 @@ impl<'a> CoapClient<'a> {
                 // Will be filled in send_next_request
                 send_time: 0,
                 timeout_ms: Self::DEFAULT_TIMEOUT,
-                retry_count: u16::MAX,
+                retry_count: 5,
                 buffered_payload: Vec::new(),
                 next_block: 0,
                 header: None,
