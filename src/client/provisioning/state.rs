@@ -1,6 +1,5 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::fmt;
-use pal::timer::get_time_ms;
 
 use crate::certmgr::X509Certificate;
 
@@ -79,6 +78,16 @@ pub enum State<'a> {
     /// Idle state with optional timeout. After timeout resets into Init state.
     Idle { timeout: Option<u64> },
 
+    /// Triggered on error, blinks red LED to signal that provisioning has
+    /// failed.
+    SignalStatus {
+        n_blinks_plus_1: u32,
+        led_on: bool,
+        timeout: u64,
+        blink_period: u32,
+        success: bool,
+    },
+
     /// Provisioning is complete.
     Done,
 }
@@ -86,15 +95,28 @@ pub enum State<'a> {
 impl State<'_> {
     /// Transition into error state.
     pub fn error(&mut self) {
-        *self = Self::Idle {
-            timeout: Some(get_time_ms() as u64 + 5000),
+        // Quickly blink 3 times
+        *self = Self::SignalStatus {
+            n_blinks_plus_1: 4,
+            led_on: false,
+            timeout: 0,
+            blink_period: 100,
+            success: false,
         }
     }
 
-    /// Transition into complete state. In this state client becomes permanently
-    /// idle.
+    /// Signal success using green, then transition into complete state. In this
+    /// state client becomes permanently idle.
     pub fn done(&mut self) {
-        *self = Self::Done
+        // Quickly blink with green LED to signal that provisioning is
+        // successful.
+        *self = Self::SignalStatus {
+            n_blinks_plus_1: 4,
+            led_on: false,
+            timeout: 0,
+            blink_period: 100,
+            success: true,
+        }
     }
 }
 
@@ -120,6 +142,7 @@ impl fmt::Display for State<'_> {
             Self::RequestRim { .. } => write!(f, "request RIM"),
             Self::VerifyStoreRimAik { .. } => write!(f, "verify RIM"),
             Self::Idle { .. } => write!(f, "idle"),
+            Self::SignalStatus { .. } => write!(f, "signal status"),
             Self::Done => write!(f, "done"),
         }
     }

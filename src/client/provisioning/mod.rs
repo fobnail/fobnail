@@ -13,7 +13,10 @@ use trussed::{
 use crate::{
     certmgr::CertMgr,
     coap::{CoapClient, Error},
-    pal::timer::get_time_ms,
+    pal::{
+        led::{self, Led},
+        timer::get_time_ms,
+    },
 };
 use state::State;
 
@@ -71,6 +74,32 @@ impl<'a> FobnailClient<'a> {
                 if let Some(timeout) = timeout {
                     if get_time_ms() as u64 > *timeout {
                         *state = State::default();
+                    }
+                }
+            }
+            State::SignalStatus {
+                n_blinks_plus_1: n_blinks,
+                led_on,
+                timeout,
+                blink_period,
+                success,
+            } => {
+                let led = if *success { Led::Green } else { Led::Red };
+
+                if *n_blinks == 0 {
+                    if *success {
+                        *state = State::Done {}
+                    } else {
+                        *state = State::Idle {
+                            timeout: Some(get_time_ms() as u64 + 5000),
+                        }
+                    }
+                } else if *timeout == 0 || get_time_ms() as u64 > *timeout {
+                    led::control(led, !*led_on);
+                    *led_on = !*led_on;
+                    *timeout = get_time_ms() as u64 + *blink_period as u64;
+                    if !*led_on {
+                        *n_blinks -= 1;
                     }
                 }
             }
@@ -331,7 +360,8 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyMetadata { .. }
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
-            | State::VerifyStoreRimAik { .. } => {
+            | State::VerifyStoreRimAik { .. }
+            | State::SignalStatus { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -435,7 +465,8 @@ impl<'a> FobnailClient<'a> {
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
             | State::VerifyStoreRimAik { .. }
-            | State::Done => {
+            | State::Done
+            | State::SignalStatus { .. } => {
                 unreachable!()
             }
         }
