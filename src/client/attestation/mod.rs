@@ -243,7 +243,7 @@ impl<'a> FobnailClient<'a> {
                 }
                 Err(e) => {
                     error!(
-                        "Communication with attester failed (state {}): {:#?}, retrying after 5s",
+                        "Communication with attester failed (state {}): {:#?}",
                         state, e
                     );
                     state.error();
