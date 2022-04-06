@@ -7,12 +7,6 @@ use crate::certmgr::X509Certificate;
 use super::crypto::Key;
 
 pub enum State<'a> {
-    /// Repeat hello request until server responds.
-    Init { request_pending: bool },
-
-    /// State after receiving init data.
-    InitDataReceived { data: Vec<u8> },
-
     /// Send request to obtain EK certificate
     RequestEkCert { request_pending: bool },
 
@@ -106,7 +100,7 @@ impl State<'_> {
 
 impl Default for State<'_> {
     fn default() -> Self {
-        Self::Init {
+        Self::RequestEkCert {
             request_pending: false,
         }
     }
@@ -115,8 +109,6 @@ impl Default for State<'_> {
 impl fmt::Display for State<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Init { .. } => write!(f, "send init request"),
-            Self::InitDataReceived { .. } => write!(f, "init data received"),
             Self::RequestEkCert { .. } => write!(f, "request EK certificate"),
             Self::VerifyEkCertificate { .. } => write!(f, "verify EK certificate"),
             Self::RequestAik { .. } => write!(f, "request AIK"),

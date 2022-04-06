@@ -74,36 +74,6 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
-            State::Init {
-                ref mut request_pending,
-            } => {
-                if !*request_pending {
-                    *request_pending = true;
-                    let mut request = coap_lite::CoapRequest::new();
-                    request.set_path("/attest");
-                    request.set_method(RequestType::Fetch);
-                    let state = Rc::clone(&self.state);
-                    self.coap_client
-                        .queue_request(request, move |result| Self::handle_response(result, state));
-                }
-            }
-            State::InitDataReceived { data } => {
-                match ::core::str::from_utf8(&data[..]) {
-                    Ok(s) => {
-                        info!("Received response from server: {}", s);
-                    }
-                    Err(e) => {
-                        error!(
-                            "Received response from server but it's not a valid UTF-8 string: {}",
-                            e
-                        );
-                    }
-                }
-
-                *state = State::RequestEkCert {
-                    request_pending: false,
-                }
-            }
             State::RequestEkCert {
                 ref mut request_pending,
             } => {
@@ -339,8 +309,7 @@ impl<'a> FobnailClient<'a> {
         let state = &mut *(*state).borrow_mut();
 
         match state {
-            State::Init { .. }
-            | State::RequestMetadata { .. }
+            State::RequestMetadata { .. }
             | State::RequestAik { .. }
             | State::RequestEkCert { .. }
             | State::VerifyAikStage2 { .. }
@@ -356,8 +325,7 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             },
-            State::InitDataReceived { .. }
-            | State::Idle { .. }
+            State::Idle { .. }
             | State::Done
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
@@ -385,16 +353,6 @@ impl<'a> FobnailClient<'a> {
         }
 
         match state {
-            State::Init { .. } => {
-                if result.header.code == MessageClass::Response(ResponseType::Content) {
-                    *state = State::InitDataReceived {
-                        data: result.payload,
-                    };
-                } else {
-                    error!("Server gave invalid response to init request");
-                    state.error();
-                }
-            }
             State::RequestEkCert { .. } => {
                 info!("Received EK certificate");
 
@@ -471,8 +429,7 @@ impl<'a> FobnailClient<'a> {
             }
             // We don't send any requests during these states so we shouldn't
             // get responses.
-            State::InitDataReceived { .. }
-            | State::Idle { .. }
+            State::Idle { .. }
             | State::VerifyEkCertificate { .. }
             | State::VerifyMetadata { .. }
             | State::VerifyAikStage1 { .. }
