@@ -15,7 +15,7 @@ extern crate log;
 #[macro_use]
 extern crate alloc;
 
-use client::{attestation, provisioning};
+use client::{attestation, provisioning, token_provisioning};
 use smoltcp::iface::{EthernetInterfaceBuilder, Neighbor, NeighborCache};
 use smoltcp::socket::{SocketSet, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
 use smoltcp::time::Instant;
@@ -66,6 +66,7 @@ enum OperationMode<'a> {
     Idle {
         trussed: &'a mut ClientImplementation<pal::trussed::Syscall>,
     },
+    TokenProvisioning(token_provisioning::FobnailClient<'a>),
     Provisioning(provisioning::FobnailClient<'a>),
     Attestation(attestation::FobnailClient<'a>),
 }
@@ -80,11 +81,23 @@ impl<'a> OperationMode<'a> {
     ) -> &'a mut trussed::client::ClientImplementation<pal::trussed::Syscall> {
         match self {
             Self::Idle { trussed } => trussed,
+            Self::TokenProvisioning(c) => c.into_trussed(),
             Self::Provisioning(c) => c.into_trussed(),
             Self::Attestation(c) => c.into_trussed(),
         }
     }
 
+    /// Enter Fobnail token provisioning mode.
+    pub fn token_provisioning(self) -> Self {
+        // FIXME: reinitializing CoapClient resets its message ID which is used
+        // for deduplication
+        Self::TokenProvisioning(token_provisioning::FobnailClient::new(
+            CoapClient::new(SERVER_IP_ADDRESS, CoapClient::COAP_DEFAULT_PORT),
+            self.reclaim_trussed(),
+        ))
+    }
+
+    /// Enter platform provisioning mode.
     pub fn provisioning(self) -> Self {
         // FIXME: reinitializing CoapClient resets its message ID which is used
         // for deduplication
@@ -94,6 +107,7 @@ impl<'a> OperationMode<'a> {
         ))
     }
 
+    /// Enter attestation mode.
     pub fn attestation(self) -> Self {
         // FIXME: reinitializing CoapClient resets its message ID which is used
         // for deduplication
@@ -153,13 +167,33 @@ fn main() -> ! {
 
     let have_rims = have_rims(&mut trussed_fobnail_client);
     let mut operation_mode = OperationMode::new(&mut trussed_fobnail_client);
+    // TODO: check whether token is provisioned, if it is not enter token
+    // provisioning state
     operation_mode = if !have_rims {
         operation_mode.provisioning()
     } else {
         operation_mode.attestation()
     };
 
+    let mut last_button_state = false;
+    let mut button_press_time = 0;
     loop {
+        let now = pal::timer::get_time_ms() as u64;
+        // Pressing button for 10 s triggers Fobnail Token provisioning.
+        if now - button_press_time > 10000 {
+            if !matches!(operation_mode, OperationMode::TokenProvisioning(_)) {
+                // TODO: should clear currently provisioned state or even
+                // completely zero out littlefs.
+                operation_mode = operation_mode.token_provisioning();
+            }
+        }
+
+        let button_pressed = pal::button::is_pressed();
+        if button_pressed != last_button_state {
+            last_button_state = button_pressed;
+            button_press_time = now;
+        }
+
         match iface.poll(
             &mut socket_set,
             Instant {
@@ -189,6 +223,12 @@ fn main() -> ! {
         // CoAP poll
         let coap_socket = socket_set.get::<UdpSocket>(coap_socket_handle);
         match operation_mode {
+            OperationMode::TokenProvisioning(ref mut p) => {
+                p.poll(coap_socket);
+                if p.done() {
+                    operation_mode = operation_mode.provisioning();
+                }
+            }
             OperationMode::Provisioning(ref mut p) => {
                 p.poll(coap_socket);
                 if p.done() {
