@@ -26,6 +26,7 @@ use hal::timer::{Instance, Periodic};
 use hal::Clocks;
 use hal::Timer;
 
+pub mod button;
 pub mod ethernet;
 mod heap;
 pub mod led;
@@ -85,6 +86,7 @@ pub fn init() {
     unsafe { trussed::drivers::init(rng) };
 
     let port0 = gpio::p0::Parts::new(periph.P0);
+    let port1 = gpio::p1::Parts::new(periph.P1);
 
     // Initialize timers
     // set TIMER0 to poll USB every TIMER0_PERIOD_MS
@@ -109,6 +111,8 @@ pub fn init() {
         Timer::one_shot(periph.TIMER2),
         Timer::one_shot(periph.TIMER3),
     );
+
+    button::init(port1.p1_06.into_pullup_input());
 
     // Initialize Trussed before USB. Trussed formats internal storage which
     // takes some time, now when we have partial read implemented CPU is halted
