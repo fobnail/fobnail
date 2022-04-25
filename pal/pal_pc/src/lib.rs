@@ -1,5 +1,6 @@
 use std::thread::yield_now;
 
+pub mod button;
 pub mod ethernet;
 pub mod led;
 pub mod timer;
