@@ -1,12 +1,19 @@
 use core::cell::RefCell;
 
+use crate::coap::{CoapClient, Error};
+use alloc::rc::Rc;
+use coap_lite::{Packet, RequestType};
 use smoltcp::socket::{SocketRef, UdpSocket};
+use state::State;
 
-use crate::coap::CoapClient;
+use super::util::handle_server_error_response;
+
+mod state;
 
 /// Client which speaks to the Platform Owner in order to perform Fobnail Token
 /// provisioning.
 pub struct FobnailClient<'a> {
+    state: Rc<RefCell<State>>,
     coap_client: CoapClient<'a>,
     trussed: RefCell<&'a mut trussed::ClientImplementation<pal::trussed::Syscall>>,
 }
@@ -17,6 +24,7 @@ impl<'a> FobnailClient<'a> {
         trussed: &'a mut trussed::ClientImplementation<pal::trussed::Syscall>,
     ) -> Self {
         Self {
+            state: Rc::new(RefCell::new(State::default())),
             coap_client,
             trussed: RefCell::new(trussed),
         }
@@ -37,6 +45,86 @@ impl<'a> FobnailClient<'a> {
     pub fn poll(&mut self, socket: SocketRef<'_, UdpSocket>) {
         self.coap_client.poll(socket);
 
-        todo!("checkpoint");
+        macro_rules! coap_request {
+            ($method:expr, $ep:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
+
+            ($method:expr, $ep:expr, $data:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+
+                let encoded = trussed::cbor_serialize_bytes::<_, 512>(&$data).unwrap();
+                request.message.payload = encoded.to_vec();
+                request
+                    .message
+                    .set_content_format(ContentFormat::ApplicationCBOR);
+
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
+        }
+
+        let state = &mut *(*self.state).borrow_mut();
+        match state {
+            State::RequestPoCertChain { request_pending } => {
+                if !*request_pending {
+                    *request_pending = true;
+
+                    coap_request!(RequestType::Fetch, "/cert_chain")
+                }
+            }
+            State::Error => {
+                // TODO: error handling, signal status using LED
+                panic!("provisioning failed");
+            }
+        }
+    }
+
+    fn handle_response(result: Result<Packet, Error>, state: Rc<RefCell<State>>) {
+        let state = &mut *(*state).borrow_mut();
+
+        match state {
+            State::RequestPoCertChain { .. } => match result {
+                Ok(resp) => {
+                    Self::handle_server_response(resp, state);
+                }
+                Err(e) => {
+                    error!(
+                        "Communication with platform owner failed (state {}): {:#?}",
+                        state, e
+                    );
+                    state.error();
+                }
+            },
+            State::Error => {
+                // We don't send any requests during these states so we shouldn't
+                // get responses.
+                unreachable!(
+                    "We shouldn't receive receive any response during this state ({})",
+                    state
+                )
+            }
+        }
+    }
+
+    fn handle_server_response(result: Packet, state: &mut State) {
+        if handle_server_error_response(&result).is_err() {
+            error!(
+                "Failed to {}, server returned error {}, retrying in 5s",
+                state, result.header.code
+            );
+            state.error();
+            return;
+        }
+
+        todo!()
     }
 }
