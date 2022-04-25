@@ -1,6 +1,7 @@
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use cortex_m::peripheral::SCB;
 
 use hal::pac::NVMC;
 use littlefs2::path::PathBuf;
@@ -83,4 +84,17 @@ fn create_client(
             client_name
         );
     }
+}
+
+/// Resets device back into its factory state - erase persistent storage and
+/// reboot. After reboot device enters provisioning mode.
+pub fn reset_device(_trussed: &mut trussed::ClientImplementation<crate::trussed::Syscall>) -> ! {
+    // We take trussed reference to ensure no one is using it, otherwise we
+    // could potentially trigger undefined behaviour if Trussed makes any
+    // assumptions on flash contents.
+
+    // SAFETY: once storage is erased we never return and never again use
+    // Trussed
+    unsafe { store::erase_storage() };
+    SCB::sys_reset();
 }

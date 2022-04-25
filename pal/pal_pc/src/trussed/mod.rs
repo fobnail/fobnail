@@ -69,3 +69,7 @@ fn create_client(
         );
     }
 }
+
+pub fn reset_device(_trussed: &mut trussed::ClientImplementation<crate::trussed::Syscall>) -> ! {
+    unimplemented!("Device reset is not implemented in PC PAL")
+}

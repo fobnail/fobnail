@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::{cell::RefCell, intrinsics::transmute};
 
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use hal::{nvmc::Nvmc, pac::NVMC};
@@ -97,4 +97,16 @@ impl littlefs2::driver::Storage for Flash {
         nvmc.partial_erase(off, off + len, 1).unwrap();
         Ok(len as usize)
     }
+}
+
+pub(crate) unsafe fn erase_storage() {
+    let nvmc: NVMC = transmute(());
+    let storage_start = &__persistent_storage_start as *const _ as usize;
+    let storage_size = (&__persistent_storage_end as *const _ as usize) - storage_start;
+    let num_blocks = storage_size / Flash::BLOCK_SIZE;
+    let storage = ::core::slice::from_raw_parts_mut(storage_start as *mut u8, storage_size);
+
+    let mut nvmc = Nvmc::new(nvmc, storage);
+    nvmc.partial_erase(0, (num_blocks * Flash::BLOCK_SIZE).try_into().unwrap(), 1)
+        .unwrap();
 }

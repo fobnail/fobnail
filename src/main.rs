@@ -206,9 +206,9 @@ fn main() -> ! {
                 while pal::timer::get_time_ms() as u64 - t < 100 {}
             }
 
-            // TODO: should clear currently provisioned state or even
-            // completely zero out littlefs.
-            operation_mode = operation_mode.token_provisioning();
+            // Clear persistent storage and reboot. After reboot Fobnail
+            // enters provisioning mode.
+            pal::trussed::reset_device(operation_mode.reclaim_trussed());
         }
 
         let button_pressed = pal::button::is_pressed();
