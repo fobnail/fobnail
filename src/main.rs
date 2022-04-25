@@ -16,6 +16,7 @@ extern crate log;
 extern crate alloc;
 
 use client::{attestation, provisioning, token_provisioning};
+use pal::led::{self, Led};
 use smoltcp::iface::{EthernetInterfaceBuilder, Neighbor, NeighborCache};
 use smoltcp::socket::{SocketSet, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
 use smoltcp::time::Instant;
@@ -59,6 +60,17 @@ where
 {
     let meta_dir = PathBuf::from(b"/meta/");
     let result = trussed::syscall!(trussed.read_dir_first(Location::Internal, meta_dir, None));
+    result.entry.is_some()
+}
+
+/// Checks whether we have any certificates installed in certstore. This is used
+/// to detect whether Fobnail has been provisioned.
+fn have_certchain<T>(trussed: &mut T) -> bool
+where
+    T: trussed::client::FilesystemClient,
+{
+    let cert_dir = PathBuf::from(b"/cert/");
+    let result = trussed::syscall!(trussed.read_dir_first(Location::Internal, cert_dir, None));
     result.entry.is_some()
 }
 
@@ -165,11 +177,13 @@ fn main() -> ! {
     let echo_socket_handle = socket_set.add(socket);
     let coap_socket_handle = socket_set.add(coap_socket);
 
+    let have_certchain = have_certchain(&mut trussed_fobnail_client);
     let have_rims = have_rims(&mut trussed_fobnail_client);
     let mut operation_mode = OperationMode::new(&mut trussed_fobnail_client);
-    // TODO: check whether token is provisioned, if it is not enter token
-    // provisioning state
-    operation_mode = if !have_rims {
+
+    operation_mode = if !have_certchain {
+        operation_mode.token_provisioning()
+    } else if !have_rims {
         operation_mode.provisioning()
     } else {
         operation_mode.attestation()
@@ -180,12 +194,21 @@ fn main() -> ! {
     loop {
         let now = pal::timer::get_time_ms() as u64;
         // Pressing button for 10 s triggers Fobnail Token provisioning.
-        if now - button_press_time > 10000 {
-            if !matches!(operation_mode, OperationMode::TokenProvisioning(_)) {
-                // TODO: should clear currently provisioned state or even
-                // completely zero out littlefs.
-                operation_mode = operation_mode.token_provisioning();
+        if now - button_press_time > 10000
+            && !matches!(operation_mode, OperationMode::TokenProvisioning(_))
+        {
+            for _ in 0..3 {
+                let t = pal::timer::get_time_ms() as u64;
+                led::control(Led::Green, true);
+                while pal::timer::get_time_ms() as u64 - t < 100 {}
+                let t = pal::timer::get_time_ms() as u64;
+                led::control(Led::Green, false);
+                while pal::timer::get_time_ms() as u64 - t < 100 {}
             }
+
+            // TODO: should clear currently provisioned state or even
+            // completely zero out littlefs.
+            operation_mode = operation_mode.token_provisioning();
         }
 
         let button_pressed = pal::button::is_pressed();
