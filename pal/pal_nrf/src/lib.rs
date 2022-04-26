@@ -26,7 +26,10 @@ use hal::timer::{Instance, Periodic};
 use hal::Clocks;
 use hal::Timer;
 
+pub use device_id::*;
+
 pub mod button;
+mod device_id;
 pub mod ethernet;
 mod heap;
 pub mod led;
