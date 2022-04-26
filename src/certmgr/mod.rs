@@ -1,6 +1,9 @@
+use alloc::vec::Vec;
+
 pub use self::error::*;
 pub use self::key::*;
 pub use self::signature::*;
+pub use self::verify::*;
 pub use self::x509::*;
 
 mod error;
@@ -10,9 +13,17 @@ mod store;
 mod verify;
 mod x509;
 
-pub struct CertMgr;
+pub struct CertMgr {
+    volatile_certificates: Vec<X509Certificate<'static>>,
+}
 
 impl CertMgr {
+    pub fn new() -> Self {
+        Self {
+            volatile_certificates: vec![],
+        }
+    }
+
     /// Parses DER-encoded certificate without copying data. The main advantage
     /// of this method over `load_cert_owned` is that it does not copy nor
     /// dynamically allocate data. However it borrows data for lifetime of
@@ -26,5 +37,17 @@ impl CertMgr {
 
     pub fn load_cert_owned(&self, data: &[u8]) -> Result<X509Certificate<'static>> {
         X509Certificate::parse_owned(data.to_vec())
+    }
+
+    /// Loads volatile certificate. Volatile certificates are gone after
+    /// dropping `CertMgr` or calling `clear_volatile_certs`.
+    pub fn inject_volatile_cert(&mut self, mut cert: X509Certificate<'static>, trusted: bool) {
+        cert.is_trusted = trusted;
+        self.volatile_certificates.push(cert);
+    }
+
+    /// Removes all volatile certificates.
+    pub fn clear_volatile_certs(&mut self) {
+        self.volatile_certificates.clear();
     }
 }

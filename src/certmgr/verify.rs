@@ -9,7 +9,17 @@ const X509V3_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new("2.5.29.19");
 const X509V3_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new("2.5.29.15");
 const X509V3_SUBJECT_ALTERNATIVE_NAME: ObjectIdentifier = ObjectIdentifier::new("2.5.29.17");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyMode {
+    /// Verify EK certificate.
+    Ek,
+    /// Verify certificate from Platform Owner's chain.
+    Po,
+}
+
 enum Match<'a> {
+    /// Exact match using Key Identifier.
+    Exact(&'a [u8]),
     /// Non exact match (by issuer). Need to iterate over all certificates from
     /// that issuer to find signing certificate.
     NonExact(&'a str),
@@ -42,7 +52,12 @@ impl<'a, T> From<T> for MaybeOwned<'a, T> {
 }
 
 impl CertMgr {
-    pub fn verify<T>(&self, trussed: &mut T, certificate: &X509Certificate) -> Result<()>
+    pub fn verify<T>(
+        &self,
+        trussed: &mut T,
+        certificate: &X509Certificate,
+        mode: VerifyMode,
+    ) -> Result<()>
     where
         T: trussed::client::FilesystemClient + trussed::client::Sha256,
     {
@@ -50,9 +65,20 @@ impl CertMgr {
 
         let mut recursion_level = 0;
 
-        // Make sure EK certificate meets TCG requirements
-        if !Self::tcg_compliance_check(certificate) {
-            return Err(Error::DoesNotMeetTcgRequirements);
+        match mode {
+            VerifyMode::Ek => {
+                // Make sure EK certificate meets TCG requirements
+                if !Self::tcg_compliance_check(certificate) {
+                    return Err(Error::DoesNotMeetTcgRequirements);
+                }
+            }
+            VerifyMode::Po => {
+                // Make sure certificate in Platform Owner's chain meets
+                // requirements.
+                if !Self::po_requirements_check(certificate) {
+                    return Err(Error::DoesNotMeetPoRequirements);
+                }
+            }
         }
 
         let mut current_child: MaybeOwned<X509Certificate> = MaybeOwned::from(certificate);
@@ -88,9 +114,47 @@ impl CertMgr {
                 return Err(Error::ExceededRecursionLimit);
             }
 
-            match Self::get_parent_id(current_child.get())? {
-                // Exact matches are currently not implemented, see comment in get_parent_id()
+            match Self::get_parent_id(current_child.get(), mode)? {
+                Match::Exact(id) => {
+                    // Currently we can load only volatile certificates.
+                    // get_parent_id will return exact match only if we are
+                    // verifying PO certificate so we won't reach here with EK.
+
+                    let parent = self
+                        .get_volatile_cert(id)
+                        .ok_or(Error::IssuerNotFound)
+                        .and_then(|cert| {
+                            if !Self::extensions_check(&cert) {
+                                warn!("Ignoring certificate with unsupported critical extensions");
+                                Err(Error::IssuerNotFound)
+                            } else {
+                                Ok(cert)
+                            }
+                        })?;
+
+                    match self.verify_internal(
+                        trussed,
+                        Some(&parent),
+                        current_child.get(),
+                        recursion_level,
+                    ) {
+                        Ok(true) => {
+                            current_child = MaybeOwned::from(parent);
+                        }
+                        Ok(false) => {
+                            return Err(Error::IssuerNotFound);
+                        }
+                        Err(e) => {
+                            return Err(e);
+                        }
+                    }
+                }
                 Match::NonExact(organization) => {
+                    if mode == VerifyMode::Po {
+                        error!("PO certificates must use X.509v3 Authority Key ID extension");
+                        return Err(Error::DoesNotMeetPoRequirements);
+                    }
+
                     let mut found_parent = None;
 
                     // TODO: ideally we would use rust Iterator trait and for
@@ -196,6 +260,20 @@ impl CertMgr {
         true
     }
 
+    fn po_requirements_check(cert: &X509Certificate) -> bool {
+        if cert.version() != 3 {
+            error!("PO certificate mustbe X.509v3");
+            return false;
+        }
+
+        if !Self::ca_constraint_check(cert).0 {
+            error!("Each certificate in PO chain have Basic Constraints with CA=TRUE");
+            return false;
+        }
+
+        true
+    }
+
     /// Checks whether there are any unsupported critical extensions. Returns
     /// true if certificate has passed verification.
     fn extensions_check(cert: &X509Certificate) -> bool {
@@ -295,7 +373,7 @@ impl CertMgr {
 
             // Optimization: in case of self-signed certificate Authority Key ID
             // and Subject Key ID must be the same.
-            if let Some(auth_key_id) = child.authority_key_id() {
+            if let Some(auth_key_id) = child.authority_key_id().and_then(|x| x.key_identifier) {
                 if let Some(subj_key_id) = child.subject_key_id() {
                     if auth_key_id != subj_key_id {
                         return Ok(false);
@@ -348,12 +426,18 @@ impl CertMgr {
     }
 
     /// Gives hint about where to look for signing certificate.
-    fn get_parent_id<'r>(certificate: &'r X509Certificate) -> Result<Match<'r>> {
-        let issuer = certificate.issuer()?;
+    fn get_parent_id<'r>(certificate: &'r X509Certificate, mode: VerifyMode) -> Result<Match<'r>> {
+        if let Some(id) = certificate
+            .authority_key_id()
+            .and_then(|x| x.key_identifier)
+        {
+            // TODO: implemented this for EK certificates too.
+            if mode == VerifyMode::Po {
+                return Ok(Match::Exact(id.as_bytes()));
+            }
+        }
 
-        // TODO: implement certificate lookup using X.509v3 Authority Key Id
-        // This allows us to find parent certificate much quicker, as we don't
-        // have to iterate over all certificates of a respective issuer.
+        let issuer = certificate.issuer()?;
 
         if let Some(organization) = issuer.organization {
             Ok(Match::NonExact(organization))

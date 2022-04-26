@@ -215,17 +215,17 @@ impl<'a> X509Certificate<'a> {
     }
 
     /// Obtain X.509v3 Authority Key Identifier
-    pub fn authority_key_id(&self) -> Option<&[u8]> {
+    pub fn authority_key_id(&self) -> Option<AuthorityKeyIdentifier> {
         let extension = self.extension(ObjectIdentifier::new("2.5.29.35"))?;
         let key_id = AuthorityKeyIdentifier::from_der(extension.extn_value).ok()?;
-        Some(key_id.key_identifier?.as_bytes())
+        Some(key_id)
     }
 
     /// Obtain X.509v3 Subject Key Identifier
-    pub fn subject_key_id(&self) -> Option<&[u8]> {
+    pub fn subject_key_id(&self) -> Option<SubjectKeyIdentifier> {
         let extension = self.extension(ObjectIdentifier::new("2.5.29.14"))?;
         let key_id = SubjectKeyIdentifier::from_der(extension.extn_value).ok()?;
-        Some(key_id.as_bytes())
+        Some(key_id)
     }
 }
 

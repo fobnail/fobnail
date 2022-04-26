@@ -85,6 +85,13 @@ impl CertMgr {
             certmgr: self,
         }
     }
+
+    /// Find volatile certificate by its Subject ID
+    pub fn get_volatile_cert(&self, id: &[u8]) -> Option<&X509Certificate<'static>> {
+        self.volatile_certificates
+            .iter()
+            .find(|x| x.subject_key_id().map_or(false, |x| x.as_bytes() == id))
+    }
 }
 
 pub struct CertificateIterator<'a> {
