@@ -41,6 +41,9 @@ hmac = { version = "0.11", default-features = false }
 cfb-mode = { version = "0.8", default-features = false }
 aes = "0.8"
 
+[build-dependencies]
+pem-rfc7468 = { path = "external/formats/pem-rfc7468", features = ["alloc"] }
+
 [profile.dev]
 lto = "thin"
 opt-level = "z"

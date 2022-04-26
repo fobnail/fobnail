@@ -101,6 +101,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fe8f5a8a398345e52358e18ff07cc17a568fbca5c6f73873d3a62056309603"
 
 [[package]]
+name = "base64ct"
+version = "1.4.0-pre.0"
+
+[[package]]
 name = "bindgen"
 version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -644,6 +648,7 @@ dependencies = [
  "log",
  "pal_nrf",
  "pal_pc",
+ "pem-rfc7468",
  "rand_core",
  "rsa",
  "serde",
@@ -1081,6 +1086,13 @@ name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
+
+[[package]]
+name = "pem-rfc7468"
+version = "0.4.0-pre.0"
+dependencies = [
+ "base64ct",
+]
 
 [[package]]
 name = "pkcs1"
