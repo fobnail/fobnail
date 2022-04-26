@@ -12,6 +12,7 @@ use state::State;
 
 use super::{proto, util::handle_server_error_response};
 
+mod csr;
 mod state;
 
 /// Client which speaks to the Platform Owner in order to perform Fobnail Token
