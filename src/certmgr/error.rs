@@ -17,6 +17,7 @@ pub enum Error {
     DoesNotMeetTcgRequirements,
     DoesNotMeetPoRequirements,
     ExceededPathLenConstraint,
+    AuthKeyIdMissing,
     UnexpectedRoot { expected_root: &'static str },
 }
 
@@ -51,6 +52,7 @@ impl Display for Error {
             Self::ExceededPathLenConstraint => {
                 write!(f, "exceeded path length constraint")
             }
+            Self::AuthKeyIdMissing => write!(f, "certificate doesn't have Authority Key ID set"),
             Self::UnexpectedRoot { expected_root } => {
                 write!(f, "chain should terminate on {} root", expected_root)
             }

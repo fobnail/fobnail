@@ -1,9 +1,8 @@
+use core::fmt;
+
 use alloc::vec::Vec;
 use serde::Serialize;
-use trussed::{
-    api::reply::{ReadDirFirst, ReadDirNext, ReadFile},
-    types::{Location, Message, PathBuf},
-};
+use trussed::types::{Location, Message, PathBuf};
 
 use super::{CertMgr, X509Certificate};
 
@@ -11,59 +10,75 @@ impl CertMgr {
     /// Attempts to load DER-encoded X.509 certificate from file.
     pub(super) fn load_certificate_from_file<'r: 't, 't, T>(
         &self,
-        fs: &'t mut T,
-        path: PathBuf,
+        trussed: &'t mut T,
+        id: &[u8],
     ) -> Option<X509Certificate<'r>>
     where
         T: trussed::client::FilesystemClient,
     {
-        let path_copy = path.clone();
-        info!("loading {}", path);
-        match trussed::try_syscall!(fs.read_file(Location::Internal, path)) {
-            Ok(ReadFile { data }) => {
-                let data = data.as_slice();
-                match X509Certificate::parse_owned(data.to_vec()) {
-                    Ok(cert) => Some(cert),
-                    Err(e) => {
-                        error!("Certificate stored in DB is corrupted");
-                        error!("{}", e);
-                        None
-                    }
+        struct H<'a>(&'a [u8]);
+        impl fmt::Display for H<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                for b in self.0 {
+                    write!(f, "{:02x}", *b)?;
                 }
-            }
-            Err(e) => {
-                error!("Failed to read {}: {:?}", path_copy, e);
-                None
+                Ok(())
             }
         }
-    }
 
-    /// Iterate over all non-volatile certificates.
-    pub fn iter_certificates(&self) -> CertificateIterator {
-        CertificateIterator {
-            done: false,
-            first: true,
-            certmgr: self,
+        let path = format!("/cert/I_{}", H(id));
+        let file = trussed::try_syscall!(
+            trussed.read_file(Location::Internal, PathBuf::from(path.as_bytes()))
+        )
+        .ok()?;
+
+        let cert = X509Certificate::parse_owned(file.data.to_vec())
+            .map_err(|e| error!("{} is corrupted: {}", path, e))
+            .ok()?;
+
+        if let Some(subject_key_id) = cert.subject_key_id() {
+            if subject_key_id.as_bytes() != id {
+                error!("subject key id mismatch in {}", path);
+                return None;
+            }
+
+            Some(cert)
+        } else {
+            error!("No subject key id in {}", path);
+            None
         }
     }
 
     /// Find certificate by its Subject ID
-    pub fn lookup_certificate(&self, id: &[u8]) -> Option<X509Certificate<'static>> {
-        // Start with volatile certificates
-        self.volatile_certificates
+    pub fn lookup_certificate<T>(
+        &self,
+        trussed: Option<&mut T>,
+        id: &[u8],
+    ) -> Option<X509Certificate<'static>>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        super::EMBEDDED_CERTIFICATES
             .iter()
+            .map(|x| {
+                let mut cert = self.load_cert(x).unwrap();
+                // Each embedded certificate is trusted.
+                cert.is_trusted = true;
+                cert
+            })
             .find(|x| x.subject_key_id().map_or(false, |x| x.as_bytes() == id))
-            .cloned()
             .or_else(|| {
-                super::EMBEDDED_CERTIFICATES
+                self.volatile_certificates
                     .iter()
-                    .map(|x| {
-                        let mut cert = self.load_cert(x).unwrap();
-                        // Each embedded certificate is trusted.
-                        cert.is_trusted = true;
-                        cert
-                    })
                     .find(|x| x.subject_key_id().map_or(false, |x| x.as_bytes() == id))
+                    .cloned()
+                    .or_else(|| {
+                        if let Some(trussed) = trussed {
+                            self.load_certificate_from_file(trussed, id)
+                        } else {
+                            None
+                        }
+                    })
             })
     }
 
@@ -118,66 +133,6 @@ impl CertMgr {
         debug!("Wrote {}", path_str);
 
         Ok(())
-    }
-}
-
-pub struct CertificateIterator<'a> {
-    done: bool,
-    first: bool,
-    certmgr: &'a CertMgr,
-}
-
-impl<'a> CertificateIterator<'a> {
-    fn next_internal<T>(&mut self, fs: &mut T) -> Option<X509Certificate<'static>>
-    where
-        T: trussed::client::FilesystemClient,
-    {
-        loop {
-            if self.first {
-                self.first = false;
-                // Read first directory entry
-                let path_str = "/cert/";
-                let path = PathBuf::from(path_str.as_bytes());
-
-                let ReadDirFirst { entry } =
-                    trussed::try_syscall!(fs.read_dir_first(Location::Internal, path, None))
-                        .ok()?;
-                if let Some(entry) = entry {
-                    let path = PathBuf::from(entry.path());
-                    if let Some(cert) = self.certmgr.load_certificate_from_file(fs, path) {
-                        return Some(cert);
-                    }
-                } else {
-                    // Directory is empty
-                    return None;
-                }
-            } else {
-                // Read next entry
-                let ReadDirNext { entry } = trussed::try_syscall!(fs.read_dir_next()).ok()?;
-                if let Some(entry) = entry {
-                    let path = PathBuf::from(entry.path());
-                    if let Some(cert) = self.certmgr.load_certificate_from_file(fs, path) {
-                        return Some(cert);
-                    }
-                } else {
-                    return None;
-                }
-            }
-        }
-    }
-
-    pub fn next<T>(&mut self, fs: &mut T) -> Option<X509Certificate<'static>>
-    where
-        T: trussed::client::FilesystemClient,
-    {
-        if self.done {
-            return None;
-        }
-        let n = Self::next_internal(self, fs);
-        if n.is_none() {
-            self.done = true;
-        }
-        n
     }
 }
 

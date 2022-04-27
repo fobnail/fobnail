@@ -17,14 +17,6 @@ pub enum VerifyMode {
     Po,
 }
 
-enum Match<'a> {
-    /// Exact match using Key Identifier.
-    Exact(&'a [u8]),
-    /// Non exact match (by issuer). Need to iterate over all certificates from
-    /// that issuer to find signing certificate.
-    NonExact(&'a str),
-}
-
 enum MaybeOwned<'a, T> {
     Borrowed(&'a T),
     Owned(T),
@@ -135,90 +127,28 @@ impl CertMgr {
                 return Err(Error::ExceededRecursionLimit);
             }
 
-            match Self::get_parent_id(current_child.get(), mode)? {
-                Match::Exact(id) => {
-                    // Currently we can load only volatile certificates.
-                    // get_parent_id will return exact match only if we are
-                    // verifying PO certificate so we won't reach here with EK.
-
-                    let parent = self
-                        .lookup_certificate(id)
-                        .ok_or(Error::IssuerNotFound)
-                        .and_then(|cert| {
-                            if !Self::extensions_check(&cert) {
-                                warn!("Ignoring certificate with unsupported critical extensions");
-                                Err(Error::IssuerNotFound)
-                            } else {
-                                Ok(cert)
-                            }
-                        })?;
-
-                    match self.verify_internal(
-                        trussed,
-                        Some(&parent),
-                        current_child.get(),
-                        recursion_level,
-                    ) {
-                        Ok(true) => {
-                            current_child = MaybeOwned::from(parent);
-                        }
-                        Ok(false) => {
-                            return Err(Error::IssuerNotFound);
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
-                    }
-                }
-                Match::NonExact(_organization) => {
-                    if mode == VerifyMode::Po {
-                        error!("PO certificates must use X.509v3 Authority Key ID extension");
-                        return Err(Error::DoesNotMeetPoRequirements);
-                    }
-
-                    let mut found_parent = None;
-
-                    // TODO: ideally we would use rust Iterator trait and for
-                    // syntax instead of while let. Currently we cannot do it
-                    // because then we would have to pass mutable trussed
-                    // reference to iter_certificates() preventing us from
-                    // calling verify_internal() inside for loop.
-                    // Trussed needs to gain some abilities: either it's APIs
-                    // must drop &mut self requirement or Trussed clients must
-                    // be cloneable. Since Trussed calls are synchronous this
-                    // should be possible.
-                    let mut cert_it = self.iter_certificates();
-                    while let Some(parent) = cert_it.next(trussed) {
-                        if !Self::extensions_check(&parent) {
-                            warn!("Ignoring certificate with unsupported critical extensions");
-                            continue;
-                        }
-
-                        match self.verify_internal(
-                            trussed,
-                            Some(&parent),
-                            current_child.get(),
-                            recursion_level,
-                        ) {
-                            Ok(true) => {
-                                found_parent = Some(MaybeOwned::from(parent));
-                                break;
-                            }
-                            Ok(false) => {
-                                // Subject is not signed by this certificate,
-                                // but may be signed by another one so keep
-                                // going.
-                            }
-                            Err(e) => {
-                                error!("{}", e)
-                            }
-                        }
-                    }
-                    if let Some(parent) = found_parent {
-                        current_child = parent;
+            let parent = self
+                .lookup_certificate(Some(trussed), Self::get_parent_id(current_child.get())?)
+                .ok_or(Error::IssuerNotFound)
+                .and_then(|cert| {
+                    if !Self::extensions_check(&cert) {
+                        warn!("Ignoring certificate with unsupported critical extensions");
+                        Err(Error::IssuerNotFound)
                     } else {
-                        return Err(Error::IssuerNotFound);
+                        Ok(cert)
                     }
+                })?;
+
+            match self.verify_internal(trussed, Some(&parent), current_child.get(), recursion_level)
+            {
+                Ok(true) => {
+                    current_child = MaybeOwned::from(parent);
+                }
+                Ok(false) => {
+                    return Err(Error::IssuerNotFound);
+                }
+                Err(e) => {
+                    return Err(e);
                 }
             }
 
@@ -447,24 +377,14 @@ impl CertMgr {
     }
 
     /// Gives hint about where to look for issuer certificate.
-    fn get_parent_id<'r>(certificate: &'r X509Certificate, mode: VerifyMode) -> Result<Match<'r>> {
+    fn get_parent_id<'r>(certificate: &'r X509Certificate) -> Result<&'r [u8]> {
         if let Some(id) = certificate
             .authority_key_id()
             .and_then(|x| x.key_identifier)
         {
-            // TODO: implemented this for EK certificates too.
-            if mode == VerifyMode::Po {
-                return Ok(Match::Exact(id.as_bytes()));
-            }
-        }
-
-        let issuer = certificate.issuer()?;
-
-        if let Some(organization) = issuer.organization {
-            Ok(Match::NonExact(organization))
+            Ok(id.as_bytes())
         } else {
-            error!("Issuer has no organization field");
-            Err(Error::IssuerNotFound)
+            Err(Error::AuthKeyIdMissing)
         }
     }
 }
