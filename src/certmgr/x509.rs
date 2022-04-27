@@ -35,6 +35,7 @@ impl fmt::Display for IssuerSubject<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct X509Certificate<'a> {
     // These fields are kept because we need to extract raw TBS certificate to
     // verify signature. Keeping reference theoretically could result in
@@ -166,6 +167,15 @@ impl<'a> X509Certificate<'a> {
 
     pub fn is_trusted(&self) -> bool {
         self.is_trusted
+    }
+
+    /// Obtain certificate in raw form.
+    pub fn certificate_raw(&self) -> &[u8] {
+        // SAFETY: self.raw_certificate refers to data that is valid until we
+        // call drop()
+        let data =
+            unsafe { core::slice::from_raw_parts(self.raw_certificate, self.raw_certificate_len) };
+        data
     }
 
     /// Workaround for getting TBS certificate as raw byte array. Needed for
