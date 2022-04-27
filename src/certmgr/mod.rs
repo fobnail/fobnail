@@ -18,7 +18,7 @@ include!(concat!(env!("OUT_DIR"), "/root_ca.rs"));
 /// Contains list of certificates that are embedded into firmware. These
 /// certificates are immutable and cannot be replaced/removed except by
 /// updating firmware.
-static EMBEDDED_CERTIFICATES: &'static [&'static [u8]] = &[PO_CHAIN_ROOT];
+static EMBEDDED_CERTIFICATES: &[&[u8]] = &[PO_CHAIN_ROOT];
 
 pub struct CertMgr {
     /// Volatile certificates are temporary in-RAM certificates. They are

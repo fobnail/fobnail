@@ -19,7 +19,7 @@ where
     let key = cert.key()?;
     info!("Key: {}", key);
 
-    certmgr.verify(trussed, &cert)?;
+    certmgr.verify(trussed, &cert, crate::certmgr::VerifyMode::Ek)?;
 
     Ok(cert)
 }

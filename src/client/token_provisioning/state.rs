@@ -1,14 +1,26 @@
 use core::fmt;
 
+use alloc::vec::Vec;
+
 pub enum State {
     /// Request platform owner certificate chain.
-    RequestPoCertChain { request_pending: bool },
+    RequestPoCertChain {
+        request_pending: bool,
+    },
 
     /// Idle state with optional timeout. After timeout resets into Init state.
-    Idle { timeout: Option<u64> },
+    Idle {
+        timeout: Option<u64>,
+    },
 
     /// Signal either success or error by blinking with LED.
-    SignalStatus { success: bool },
+    SignalStatus {
+        success: bool,
+    },
+
+    VerifyPoCertChain {
+        chain: Vec<u8>,
+    },
 
     /// Provisioning is complete. Main loop is responsible for switching mode
     /// into platform provisioning mode.
@@ -40,6 +52,7 @@ impl fmt::Display for State {
         match self {
             Self::RequestPoCertChain { .. } => write!(f, "request po cert chain"),
             Self::SignalStatus { .. } => write!(f, "signal status"),
+            Self::VerifyPoCertChain { .. } => write!(f, "verify po cert chain"),
             Self::Done => write!(f, "done"),
             Self::Idle { .. } => write!(f, "idle"),
         }

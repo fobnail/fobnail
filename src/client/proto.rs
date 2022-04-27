@@ -425,6 +425,12 @@ pub struct QuoteRequest<'a> {
     pub banks: &'a [super::policy::Bank],
 }
 
+#[derive(Deserialize)]
+pub struct PoCertChain<'a> {
+    #[serde(borrow)]
+    pub certs: ArrayOf<'a, &'a serde_bytes::Bytes>,
+}
+
 #[cfg(test)]
 mod tests {
     use core::marker::PhantomData;

@@ -39,7 +39,7 @@ impl CertMgr {
     }
 
     /// Iterate over all non-volatile certificates.
-    pub fn iter_certificates<'r>(&'r self) -> CertificateIterator<'r> {
+    pub fn iter_certificates(&self) -> CertificateIterator {
         CertificateIterator {
             done: false,
             first: true,
@@ -90,13 +90,13 @@ impl CertMgr {
             certs: &'a [&'a serde_bytes::Bytes],
         }
         let certs: Vec<_> = cert
-            .into_iter()
+            .iter()
             .map(|x| serde_bytes::Bytes::new(x.certificate_raw()))
             .collect();
         let chain = Chain { certs: &certs };
 
         let mut total_cert_len = 0;
-        cert.into_iter()
+        cert.iter()
             .for_each(|x| total_cert_len += x.certificate_raw().len());
 
         let mut buf = Vec::new();
@@ -136,7 +136,7 @@ impl<'a> CertificateIterator<'a> {
             if self.first {
                 self.first = false;
                 // Read first directory entry
-                let path_str = format!("/cert/");
+                let path_str = "/cert/";
                 let path = PathBuf::from(path_str.as_bytes());
 
                 let ReadDirFirst { entry } =

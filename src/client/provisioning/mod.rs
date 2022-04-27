@@ -44,7 +44,7 @@ impl<'a> FobnailClient<'a> {
             state: Rc::new(RefCell::new(State::default())),
             coap_client,
             trussed: RefCell::new(trussed),
-            certmgr: CertMgr {},
+            certmgr: CertMgr::new(),
         }
     }
 

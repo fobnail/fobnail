@@ -1,13 +1,16 @@
 use core::cell::RefCell;
 
-use crate::coap::{CoapClient, Error};
+use crate::{
+    certmgr::CertMgr,
+    coap::{CoapClient, Error},
+};
 use alloc::rc::Rc;
-use coap_lite::{Packet, RequestType};
+use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use state::State;
 
-use super::util::handle_server_error_response;
+use super::{proto, util::handle_server_error_response};
 
 mod state;
 
@@ -17,6 +20,7 @@ pub struct FobnailClient<'a> {
     state: Rc<RefCell<State>>,
     coap_client: CoapClient<'a>,
     trussed: RefCell<&'a mut trussed::ClientImplementation<pal::trussed::Syscall>>,
+    certmgr: CertMgr,
 }
 
 impl<'a> FobnailClient<'a> {
@@ -28,6 +32,7 @@ impl<'a> FobnailClient<'a> {
             state: Rc::new(RefCell::new(State::default())),
             coap_client,
             trussed: RefCell::new(trussed),
+            certmgr: CertMgr::new(),
         }
     }
 
@@ -104,6 +109,18 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
+            State::VerifyPoCertChain { chain } => {
+                let mut trussed = self.trussed.borrow_mut();
+                if Self::verify_certchain(*trussed, &mut self.certmgr, chain).is_err() {
+                    error!("PO chain verification failed");
+                    state.error();
+                } else {
+                    info!("PO chain verification OK");
+                    // That far implementation goes currently, switch to platform provisioning mode.
+                    // Will add more states soon.
+                    state.done();
+                }
+            }
         }
     }
 
@@ -123,7 +140,10 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             },
-            State::Done | State::Idle { .. } | State::SignalStatus { .. } => {
+            State::Done
+            | State::Idle { .. }
+            | State::SignalStatus { .. }
+            | State::VerifyPoCertChain { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -144,6 +164,96 @@ impl<'a> FobnailClient<'a> {
             return;
         }
 
-        todo!()
+        match state {
+            State::RequestPoCertChain { .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Content) {
+                    *state = State::VerifyPoCertChain {
+                        chain: result.payload,
+                    }
+                } else {
+                    error!("Server gave invalid response to certificate chain request");
+                    state.error();
+                }
+            }
+            _ => {
+                // We already matched all possible states in handle_response()
+                // and we should never reach here
+                unreachable!()
+            }
+        }
+    }
+
+    /// Verify certchain and save it to persistent storage if verification is
+    /// successful.
+    fn verify_certchain<T>(trussed: &mut T, certmgr: &mut CertMgr, chain: &[u8]) -> Result<(), ()>
+    where
+        T: trussed::client::FilesystemClient + trussed::client::Sha256,
+    {
+        /// Minimal number of certificates required in a chain (including root).
+        const MIN_CERTS: usize = 2;
+        /// Max number of certificates allowed in a chain (including root).
+        const MAX_CERTS: usize = 3;
+
+        let chain = trussed::cbor_deserialize::<proto::PoCertChain>(chain)
+            .map_err(|e| error!("Failed to deserialize PO certchain: {}", e))?;
+
+        let num_certs = chain.certs.len();
+        if !matches!(num_certs, MIN_CERTS..=MAX_CERTS) {
+            error!(
+                "Expected between {} and {} certificates but got {}",
+                MIN_CERTS, MAX_CERTS, num_certs
+            );
+        }
+
+        let mut it = chain.certs.iter();
+        let root_raw = it.next().unwrap();
+        // Attester sends full chain, including root ca. Check only whether received
+        // root CA matches embedded CA.
+        if &root_raw[..] != CertMgr::po_root_raw() {
+            error!("Received root CA doesn't match with CA stored in firmware");
+            return Err(());
+        }
+
+        for cert in it {
+            match certmgr.load_cert_owned(cert) {
+                Ok(cert) => match certmgr.verify(trussed, &cert, crate::certmgr::VerifyMode::Po) {
+                    Ok(()) => {
+                        // Inject as volatile certificate, we will save
+                        // certificates to persistent storage only after entire
+                        // chain has been verified.
+                        certmgr.inject_volatile_cert(cert);
+                    }
+                    Err(e) => {
+                        error!("Cert verification failed: {}", e);
+                        certmgr.clear_volatile_certs();
+                        return Err(());
+                    }
+                },
+                Err(e) => {
+                    error!("Invalid certificate: {}", e);
+                    certmgr.clear_volatile_certs();
+                    return Err(());
+                }
+            }
+        }
+
+        certmgr.clear_volatile_certs();
+
+        // Save certchain to persistent storage (except root certificate) which
+        // is already embedded into firmware itself.
+        let certs: trussed::types::Vec<_, { MAX_CERTS - 1 }> = chain
+            .certs
+            .inner
+            .iter()
+            .skip(1)
+            .map(|x| certmgr.load_cert(x).unwrap())
+            .collect();
+        let cert_refs: trussed::types::Vec<_, { MAX_CERTS - 1 }> = certs.iter().collect();
+
+        certmgr
+            .save_certchain(trussed, cert_refs.as_slice(), "po_chain")
+            .map_err(|()| error!("Failed to save PO chain"))?;
+
+        Ok(())
     }
 }

@@ -32,7 +32,7 @@ fn main() -> Result<(), String> {
     let mut out_file = File::create(root_ca_out).unwrap();
 
     out_file
-        .write_all(b"static PO_CHAIN_ROOT: &'static [u8] = &[\n")
+        .write_all(b"static PO_CHAIN_ROOT: &[u8] = &[\n")
         .unwrap();
     for chunk in der.chunks(16) {
         struct H<'a>(&'a [u8]);
