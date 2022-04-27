@@ -1,8 +1,6 @@
 use core::fmt;
 
-use alloc::vec::Vec;
-use serde::Serialize;
-use trussed::types::{Location, Message, PathBuf};
+use trussed::types::{Location, PathBuf};
 
 use super::{CertMgr, X509Certificate};
 
@@ -81,78 +79,4 @@ impl CertMgr {
                     })
             })
     }
-
-    /// Saves certificate chain into a single file named
-    pub fn save_certchain<T>(
-        &self,
-        trussed: &mut T,
-        cert: &[&X509Certificate],
-        filename: &str,
-    ) -> Result<(), ()>
-    where
-        T: trussed::client::FilesystemClient,
-    {
-        // Maybe a bit overkill but in case there is wrong usage or if in future
-        // this method will be called with untrusted arguments this will be
-        // detected.
-        if !sanitize_path_component(filename) {
-            error!("Certchain file name contains banned characters");
-            return Err(());
-        }
-
-        #[derive(Serialize)]
-        pub struct Chain<'a> {
-            certs: &'a [&'a serde_bytes::Bytes],
-        }
-        let certs: Vec<_> = cert
-            .iter()
-            .map(|x| serde_bytes::Bytes::new(x.certificate_raw()))
-            .collect();
-        let chain = Chain { certs: &certs };
-
-        let mut total_cert_len = 0;
-        cert.iter()
-            .for_each(|x| total_cert_len += x.certificate_raw().len());
-
-        let mut buf = Vec::new();
-        buf.resize(total_cert_len + 8 + 4 * certs.len(), 0);
-
-        let buf = trussed::cbor_serialize(&chain, &mut buf).unwrap();
-
-        let path_str = format!("/cert/{}", filename);
-        let path = PathBuf::from(path_str.as_bytes());
-        trussed::try_syscall!(trussed.write_file(
-            Location::Internal,
-            path,
-            Message::from_slice(buf)
-                .map_err(|_| error!("Chain is too big to save it in persistent storage"))?,
-            None,
-        ))
-        .map_err(|_| error!("Failed to save cert chain to {}", path_str))?;
-
-        debug!("Wrote {}", path_str);
-
-        Ok(())
-    }
-}
-
-/// Checks for presence of forbidden characters (or sequences of characters).
-/// This exists to prevent path traversal attacks.
-///
-/// Return value
-/// [`true`] if path is safe.
-/// [`false`] if found banned characters.
-fn sanitize_path_component(component: &str) -> bool {
-    // TODO: should check whether these characters/sequences are valid from
-    // X.509 perspective, and consider name mangling.
-
-    let mut prev = 'a';
-    for c in component.chars() {
-        if c == '/' || (c == '.' && prev == '.') {
-            return false;
-        }
-        prev = c;
-    }
-
-    true
 }

@@ -183,8 +183,8 @@ impl<'a> FobnailClient<'a> {
         }
     }
 
-    /// Verify certchain and save it to persistent storage if verification is
-    /// successful.
+    /// Verify certchain. On success certificates are loaded into certstore as
+    /// volatile certificates so that they can be used later.
     fn verify_certchain<T>(trussed: &mut T, certmgr: &mut CertMgr, chain: &[u8]) -> Result<(), ()>
     where
         T: trussed::client::FilesystemClient + trussed::client::Sha256,
@@ -237,22 +237,7 @@ impl<'a> FobnailClient<'a> {
             }
         }
 
-        certmgr.clear_volatile_certs();
-
-        // Save certchain to persistent storage (except root certificate) which
-        // is already embedded into firmware itself.
-        let certs: trussed::types::Vec<_, { MAX_CERTS - 1 }> = chain
-            .certs
-            .inner
-            .iter()
-            .skip(1)
-            .map(|x| certmgr.load_cert(x).unwrap())
-            .collect();
-        let cert_refs: trussed::types::Vec<_, { MAX_CERTS - 1 }> = certs.iter().collect();
-
-        certmgr
-            .save_certchain(trussed, cert_refs.as_slice(), "po_chain")
-            .map_err(|()| error!("Failed to save PO chain"))?;
+        // Don't remove volatile certs yet, we will need to them later.
 
         Ok(())
     }
