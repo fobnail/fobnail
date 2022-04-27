@@ -17,6 +17,7 @@ pub enum Error {
     DoesNotMeetTcgRequirements,
     DoesNotMeetPoRequirements,
     ExceededPathLenConstraint,
+    UnexpectedRoot { expected_root: &'static str },
 }
 
 impl From<x509::der::Error> for Error {
@@ -49,6 +50,9 @@ impl Display for Error {
             }
             Self::ExceededPathLenConstraint => {
                 write!(f, "exceeded path length constraint")
+            }
+            Self::UnexpectedRoot { expected_root } => {
+                write!(f, "chain should terminate on {} root", expected_root)
             }
         }
     }

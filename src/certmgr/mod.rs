@@ -13,7 +13,17 @@ mod store;
 mod verify;
 mod x509;
 
+include!(concat!(env!("OUT_DIR"), "/root_ca.rs"));
+
+/// Contains list of certificates that are embedded into firmware. These
+/// certificates are immutable and cannot be replaced/removed except by
+/// updating firmware.
+static EMBEDDED_CERTIFICATES: &'static [&'static [u8]] = &[PO_CHAIN_ROOT];
+
 pub struct CertMgr {
+    /// Volatile certificates are temporary in-RAM certificates. They are
+    /// removed when `CertMgr` gets dropped or after calling
+    /// `clear_volatile_certs`.
     volatile_certificates: Vec<X509Certificate<'static>>,
 }
 
@@ -41,13 +51,18 @@ impl CertMgr {
 
     /// Loads volatile certificate. Volatile certificates are gone after
     /// dropping `CertMgr` or calling `clear_volatile_certs`.
-    pub fn inject_volatile_cert(&mut self, mut cert: X509Certificate<'static>, trusted: bool) {
-        cert.is_trusted = trusted;
+    pub fn inject_volatile_cert(&mut self, cert: X509Certificate<'static>) {
         self.volatile_certificates.push(cert);
     }
 
     /// Removes all volatile certificates.
     pub fn clear_volatile_certs(&mut self) {
         self.volatile_certificates.clear();
+    }
+
+    /// Obtain reference to a raw (non-decoded DER) Platform Owner certificate.
+    pub fn po_root_raw() -> &'static [u8] {
+        // PO root must always be the first certificate
+        EMBEDDED_CERTIFICATES[0]
     }
 }

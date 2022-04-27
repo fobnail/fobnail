@@ -52,6 +52,7 @@ impl<'a, T> From<T> for MaybeOwned<'a, T> {
 }
 
 impl CertMgr {
+    /// Verifies certificate chain starting with leaf and ending on trusted root.
     pub fn verify<T>(
         &self,
         trussed: &mut T,
@@ -102,6 +103,26 @@ impl CertMgr {
                     warn!("non-root certificate marked as trusted");
                 }
 
+                match mode {
+                    VerifyMode::Po => {
+                        // Last check, make sure that the root is Platform Owner's
+                        // root and not some other root.
+                        if current_child.get().certificate_raw() != Self::po_root_raw() {
+                            return Err(Error::UnexpectedRoot {
+                                expected_root: "PO",
+                            });
+                        }
+                    }
+                    VerifyMode::Ek => {
+                        // EK cannot be signed by PO root.
+                        if current_child.get().certificate_raw() == Self::po_root_raw() {
+                            return Err(Error::UnexpectedRoot {
+                                expected_root: "EK",
+                            });
+                        }
+                    }
+                }
+
                 return Ok(());
             } else {
                 // Self-signed certificate terminates certificate chain.
@@ -121,7 +142,7 @@ impl CertMgr {
                     // verifying PO certificate so we won't reach here with EK.
 
                     let parent = self
-                        .get_volatile_cert(id)
+                        .lookup_certificate(id)
                         .ok_or(Error::IssuerNotFound)
                         .and_then(|cert| {
                             if !Self::extensions_check(&cert) {
@@ -149,7 +170,7 @@ impl CertMgr {
                         }
                     }
                 }
-                Match::NonExact(organization) => {
+                Match::NonExact(_organization) => {
                     if mode == VerifyMode::Po {
                         error!("PO certificates must use X.509v3 Authority Key ID extension");
                         return Err(Error::DoesNotMeetPoRequirements);
@@ -166,7 +187,7 @@ impl CertMgr {
                     // must drop &mut self requirement or Trussed clients must
                     // be cloneable. Since Trussed calls are synchronous this
                     // should be possible.
-                    let mut cert_it = self.iter_certificates(organization);
+                    let mut cert_it = self.iter_certificates();
                     while let Some(parent) = cert_it.next(trussed) {
                         if !Self::extensions_check(&parent) {
                             warn!("Ignoring certificate with unsupported critical extensions");
@@ -262,12 +283,12 @@ impl CertMgr {
 
     fn po_requirements_check(cert: &X509Certificate) -> bool {
         if cert.version() != 3 {
-            error!("PO certificate mustbe X.509v3");
+            error!("PO certificate must be X.509v3");
             return false;
         }
 
         if !Self::ca_constraint_check(cert).0 {
-            error!("Each certificate in PO chain have Basic Constraints with CA=TRUE");
+            error!("Each certificate in PO chain must have Basic Constraints with CA=TRUE");
             return false;
         }
 
@@ -425,7 +446,7 @@ impl CertMgr {
         }
     }
 
-    /// Gives hint about where to look for signing certificate.
+    /// Gives hint about where to look for issuer certificate.
     fn get_parent_id<'r>(certificate: &'r X509Certificate, mode: VerifyMode) -> Result<Match<'r>> {
         if let Some(id) = certificate
             .authority_key_id()

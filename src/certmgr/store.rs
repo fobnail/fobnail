@@ -1,17 +1,11 @@
+use alloc::vec::Vec;
+use serde::Serialize;
 use trussed::{
-    api::reply::{ReadAttribute, ReadDirFirst, ReadDirNext, ReadFile},
-    types::{Location, PathBuf},
+    api::reply::{ReadDirFirst, ReadDirNext, ReadFile},
+    types::{Location, Message, PathBuf},
 };
 
 use super::{CertMgr, X509Certificate};
-
-/// Attribute for storing certificate flags. Currently only trusted flag is
-/// implemented (CERTIFICATE_FLAG_TRUSTED), all other bits are reserved for
-/// future use.
-const ATTRIBUTE_CERTIFICATE_FLAGS: u8 = 0;
-/// Controls whether certificate stored in DB is trusted. Should be set for root
-/// CAs.
-const CERTIFICATE_FLAG_TRUSTED: u8 = 1;
 
 impl CertMgr {
     /// Attempts to load DER-encoded X.509 certificate from file.
@@ -29,31 +23,7 @@ impl CertMgr {
             Ok(ReadFile { data }) => {
                 let data = data.as_slice();
                 match X509Certificate::parse_owned(data.to_vec()) {
-                    Ok(mut cert) => {
-                        match trussed::try_syscall!(fs.read_attribute(
-                            Location::Internal,
-                            path_copy,
-                            ATTRIBUTE_CERTIFICATE_FLAGS,
-                        )) {
-                            Ok(ReadAttribute { data }) => {
-                                if let Some(attr) = data {
-                                    if let Some(&flags) = attr.first() {
-                                        if flags & CERTIFICATE_FLAG_TRUSTED != 0 {
-                                            cert.is_trusted = true;
-                                        }
-                                    }
-                                } else {
-                                    // Assume defaults
-                                }
-                            }
-
-                            Err(_) => {
-                                warn!("Failed to read certificate flags");
-                            }
-                        }
-
-                        Some(cert)
-                    }
+                    Ok(cert) => Some(cert),
                     Err(e) => {
                         error!("Certificate stored in DB is corrupted");
                         error!("{}", e);
@@ -68,34 +38,90 @@ impl CertMgr {
         }
     }
 
-    /// Iterate over certificates issued by a specified organization.
-    pub fn iter_certificates<'r>(&'r self, organization: &'r str) -> CertificateIterator<'r> {
-        let valid_path = sanitize_path_component(organization);
-        if !valid_path {
-            warn!(
-                "Found forbidden characters in organization name ({})",
-                organization
-            );
-        }
-
+    /// Iterate over all non-volatile certificates.
+    pub fn iter_certificates<'r>(&'r self) -> CertificateIterator<'r> {
         CertificateIterator {
-            organization,
-            done: !valid_path,
+            done: false,
             first: true,
             certmgr: self,
         }
     }
 
-    /// Find volatile certificate by its Subject ID
-    pub fn get_volatile_cert(&self, id: &[u8]) -> Option<&X509Certificate<'static>> {
+    /// Find certificate by its Subject ID
+    pub fn lookup_certificate(&self, id: &[u8]) -> Option<X509Certificate<'static>> {
+        // Start with volatile certificates
         self.volatile_certificates
             .iter()
             .find(|x| x.subject_key_id().map_or(false, |x| x.as_bytes() == id))
+            .cloned()
+            .or_else(|| {
+                super::EMBEDDED_CERTIFICATES
+                    .iter()
+                    .map(|x| {
+                        let mut cert = self.load_cert(x).unwrap();
+                        // Each embedded certificate is trusted.
+                        cert.is_trusted = true;
+                        cert
+                    })
+                    .find(|x| x.subject_key_id().map_or(false, |x| x.as_bytes() == id))
+            })
+    }
+
+    /// Saves certificate chain into a single file named
+    pub fn save_certchain<T>(
+        &self,
+        trussed: &mut T,
+        cert: &[&X509Certificate],
+        filename: &str,
+    ) -> Result<(), ()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        // Maybe a bit overkill but in case there is wrong usage or if in future
+        // this method will be called with untrusted arguments this will be
+        // detected.
+        if !sanitize_path_component(filename) {
+            error!("Certchain file name contains banned characters");
+            return Err(());
+        }
+
+        #[derive(Serialize)]
+        pub struct Chain<'a> {
+            certs: &'a [&'a serde_bytes::Bytes],
+        }
+        let certs: Vec<_> = cert
+            .into_iter()
+            .map(|x| serde_bytes::Bytes::new(x.certificate_raw()))
+            .collect();
+        let chain = Chain { certs: &certs };
+
+        let mut total_cert_len = 0;
+        cert.into_iter()
+            .for_each(|x| total_cert_len += x.certificate_raw().len());
+
+        let mut buf = Vec::new();
+        buf.resize(total_cert_len + 8 + 4 * certs.len(), 0);
+
+        let buf = trussed::cbor_serialize(&chain, &mut buf).unwrap();
+
+        let path_str = format!("/cert/{}", filename);
+        let path = PathBuf::from(path_str.as_bytes());
+        trussed::try_syscall!(trussed.write_file(
+            Location::Internal,
+            path,
+            Message::from_slice(buf)
+                .map_err(|_| error!("Chain is too big to save it in persistent storage"))?,
+            None,
+        ))
+        .map_err(|_| error!("Failed to save cert chain to {}", path_str))?;
+
+        debug!("Wrote {}", path_str);
+
+        Ok(())
     }
 }
 
 pub struct CertificateIterator<'a> {
-    organization: &'a str,
     done: bool,
     first: bool,
     certmgr: &'a CertMgr,
@@ -110,7 +136,7 @@ impl<'a> CertificateIterator<'a> {
             if self.first {
                 self.first = false;
                 // Read first directory entry
-                let path_str = format!("/cert/{}/", self.organization);
+                let path_str = format!("/cert/");
                 let path = PathBuf::from(path_str.as_bytes());
 
                 let ReadDirFirst { entry } =
