@@ -3,6 +3,7 @@ use core::cell::RefCell;
 use crate::coap::{CoapClient, Error};
 use alloc::rc::Rc;
 use coap_lite::{Packet, RequestType};
+use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use state::State;
 
@@ -38,8 +39,9 @@ impl<'a> FobnailClient<'a> {
 
     /// Checks whether provisioning is done.
     pub fn done(&self) -> bool {
-        // TODO: implement this
-        false
+        let state = &mut *(*self.state).borrow_mut();
+
+        matches!(state, State::Done)
     }
 
     pub fn poll(&mut self, socket: SocketRef<'_, UdpSocket>) {
@@ -74,6 +76,9 @@ impl<'a> FobnailClient<'a> {
 
         let state = &mut *(*self.state).borrow_mut();
         match state {
+            State::Done => {
+                unreachable!("Should not be polled in this state");
+            }
             State::RequestPoCertChain { request_pending } => {
                 if !*request_pending {
                     *request_pending = true;
@@ -81,9 +86,23 @@ impl<'a> FobnailClient<'a> {
                     coap_request!(RequestType::Fetch, "/cert_chain")
                 }
             }
-            State::Error => {
-                // TODO: error handling, signal status using LED
-                panic!("provisioning failed");
+            State::SignalStatus { success } => {
+                // TODO: signal status, probably should use different signaling
+                // than when provisioning platform
+                if *success {
+                    *state = State::Done;
+                } else {
+                    *state = State::Idle {
+                        timeout: Some(get_time_ms() as u64 + 5000),
+                    };
+                }
+            }
+            State::Idle { timeout } => {
+                if let Some(timeout) = timeout {
+                    if get_time_ms() as u64 > *timeout {
+                        *state = State::default();
+                    }
+                }
             }
         }
     }
@@ -104,7 +123,7 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             },
-            State::Error => {
+            State::Done | State::Idle { .. } | State::SignalStatus { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
