@@ -199,7 +199,7 @@ impl<'a> FobnailClient<'a> {
         /// Max number of certificates allowed in a chain (including root).
         const MAX_CERTS: usize = 3;
 
-        let chain = trussed::cbor_deserialize::<proto::PoCertChain>(chain)
+        let chain = trussed::cbor_deserialize::<proto::CertChain>(chain)
             .map_err(|e| error!("Failed to deserialize PO certchain: {}", e))?;
 
         let num_certs = chain.certs.len();

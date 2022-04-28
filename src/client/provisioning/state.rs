@@ -7,10 +7,10 @@ use super::crypto::Key;
 
 pub enum State<'a> {
     /// Send request to obtain EK certificate
-    RequestEkCert { request_pending: bool },
+    RequestEkCertChain { request_pending: bool },
 
     /// Verify EK certificate chain
-    VerifyEkCertificate { data: Vec<u8> },
+    VerifyEkCertificateChain { data: Vec<u8> },
 
     RequestAik {
         // FIXME:
@@ -122,7 +122,7 @@ impl State<'_> {
 
 impl Default for State<'_> {
     fn default() -> Self {
-        Self::RequestEkCert {
+        Self::RequestEkCertChain {
             request_pending: false,
         }
     }
@@ -131,8 +131,8 @@ impl Default for State<'_> {
 impl fmt::Display for State<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RequestEkCert { .. } => write!(f, "request EK certificate"),
-            Self::VerifyEkCertificate { .. } => write!(f, "verify EK certificate"),
+            Self::RequestEkCertChain { .. } => write!(f, "request EK certificate chain"),
+            Self::VerifyEkCertificateChain { .. } => write!(f, "verify EK certificate chain"),
             Self::RequestAik { .. } => write!(f, "request AIK"),
             Self::VerifyAikStage1 { .. } => write!(f, "verify AIK (stage 1)"),
             Self::VerifyAikStage2 { .. } => write!(f, "verify AIK (stage 2)"),

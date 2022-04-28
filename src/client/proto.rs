@@ -426,7 +426,7 @@ pub struct QuoteRequest<'a> {
 }
 
 #[derive(Deserialize)]
-pub struct PoCertChain<'a> {
+pub struct CertChain<'a> {
     #[serde(borrow)]
     pub certs: ArrayOf<'a, &'a serde_bytes::Bytes>,
 }

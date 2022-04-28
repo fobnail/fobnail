@@ -103,7 +103,7 @@ impl<'a> FobnailClient<'a> {
                     }
                 }
             }
-            State::RequestEkCert {
+            State::RequestEkCertChain {
                 ref mut request_pending,
             } => {
                 if !*request_pending {
@@ -116,18 +116,18 @@ impl<'a> FobnailClient<'a> {
                         .queue_request(request, move |result| Self::handle_response(result, state));
                 }
             }
-            State::VerifyEkCertificate { data } => {
+            State::VerifyEkCertificateChain { data } => {
                 let mut trussed = self.trussed.borrow_mut();
 
-                match tpm::ek::load(*trussed, &self.certmgr, data) {
+                match tpm::ek::load(*trussed, &mut self.certmgr, data) {
                     Ok(cert) => {
                         *state = State::RequestAik {
                             request_pending: false,
                             ek_cert: Some(cert),
                         };
                     }
-                    Err(e) => {
-                        error!("Failed to load EK certificate: {}", e);
+                    Err(()) => {
+                        error!("Failed to load EK certificate");
                         state.error()
                     }
                 }
@@ -340,7 +340,7 @@ impl<'a> FobnailClient<'a> {
         match state {
             State::RequestMetadata { .. }
             | State::RequestAik { .. }
-            | State::RequestEkCert { .. }
+            | State::RequestEkCertChain { .. }
             | State::VerifyAikStage2 { .. }
             | State::RequestRim { .. } => match result {
                 Ok(resp) => {
@@ -356,7 +356,7 @@ impl<'a> FobnailClient<'a> {
             },
             State::Idle { .. }
             | State::Done
-            | State::VerifyEkCertificate { .. }
+            | State::VerifyEkCertificateChain { .. }
             | State::VerifyMetadata { .. }
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
@@ -383,11 +383,11 @@ impl<'a> FobnailClient<'a> {
         }
 
         match state {
-            State::RequestEkCert { .. } => {
+            State::RequestEkCertChain { .. } => {
                 info!("Received EK certificate");
 
                 if result.header.code == MessageClass::Response(ResponseType::Content) {
-                    *state = State::VerifyEkCertificate {
+                    *state = State::VerifyEkCertificateChain {
                         data: result.payload,
                     }
                 } else {
@@ -460,7 +460,7 @@ impl<'a> FobnailClient<'a> {
             // We don't send any requests during these states so we shouldn't
             // get responses.
             State::Idle { .. }
-            | State::VerifyEkCertificate { .. }
+            | State::VerifyEkCertificateChain { .. }
             | State::VerifyMetadata { .. }
             | State::VerifyAikStage1 { .. }
             | State::LoadAik { .. }
