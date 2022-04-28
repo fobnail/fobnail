@@ -4,13 +4,13 @@ use crate::{
     certmgr::CertMgr,
     coap::{CoapClient, Error},
 };
-use alloc::rc::Rc;
+use alloc::{boxed::Box, rc::Rc};
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use state::State;
 
-use super::{proto, util::handle_server_error_response};
+use super::{crypto, proto, util::handle_server_error_response};
 
 mod csr;
 mod state;
@@ -78,6 +78,18 @@ impl<'a> FobnailClient<'a> {
                 self.coap_client
                     .queue_request(request, move |result| Self::handle_response(result, state));
             }};
+
+            // Like above, but without encoding
+            ($method:expr, $ep:expr, raw $data:expr) => {{
+                let mut request = coap_lite::CoapRequest::new();
+                request.set_path($ep);
+                request.set_method($method);
+                request.message.payload = $data;
+
+                let state = Rc::clone(&self.state);
+                self.coap_client
+                    .queue_request(request, move |result| Self::handle_response(result, state));
+            }};
         }
 
         let state = &mut *(*self.state).borrow_mut();
@@ -122,10 +134,33 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 } else {
                     info!("PO chain verification OK");
-                    // That far implementation goes currently, switch to platform provisioning mode.
-                    // Will add more states soon.
-                    state.done();
+                    *state = State::GenerateKeys;
                 }
+            }
+            State::GenerateKeys => {
+                let mut trussed = self.trussed.borrow_mut();
+                let keypair = Box::new(crypto::generate_rsa_key(*trussed, 2048));
+
+                *state = State::SendCsr {
+                    request_pending: false,
+                    keypair: Some(keypair),
+                }
+            }
+            State::SendCsr {
+                request_pending,
+                keypair,
+            } => {
+                if !*request_pending {
+                    *request_pending = true;
+
+                    let keypair = keypair.as_ref().unwrap();
+
+                    let req = csr::make_csr(&keypair.0, &keypair.1, pal::device_id()).unwrap();
+                    coap_request!(RequestType::Post, "csr", raw req);
+                }
+            }
+            State::VerifyCertificate { .. } => {
+                todo!()
             }
         }
     }
@@ -134,7 +169,7 @@ impl<'a> FobnailClient<'a> {
         let state = &mut *(*state).borrow_mut();
 
         match state {
-            State::RequestPoCertChain { .. } => match result {
+            State::RequestPoCertChain { .. } | State::SendCsr { .. } => match result {
                 Ok(resp) => {
                     Self::handle_server_response(resp, state);
                 }
@@ -149,7 +184,9 @@ impl<'a> FobnailClient<'a> {
             State::Done
             | State::Idle { .. }
             | State::SignalStatus { .. }
-            | State::VerifyPoCertChain { .. } => {
+            | State::VerifyPoCertChain { .. }
+            | State::GenerateKeys
+            | State::VerifyCertificate { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -178,6 +215,17 @@ impl<'a> FobnailClient<'a> {
                     }
                 } else {
                     error!("Server gave invalid response to certificate chain request");
+                    state.error();
+                }
+            }
+            State::SendCsr { keypair, .. } => {
+                if result.header.code == MessageClass::Response(ResponseType::Created) {
+                    *state = State::VerifyCertificate {
+                        keypair: keypair.take().unwrap(),
+                        certificate: result.payload,
+                    }
+                } else {
+                    error!("Server gave invalid response to certification request");
                     state.error();
                 }
             }

@@ -1,6 +1,7 @@
 use core::fmt;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
+use rsa::{RsaPrivateKey, RsaPublicKey};
 
 pub enum State {
     /// Request platform owner certificate chain.
@@ -20,6 +21,21 @@ pub enum State {
 
     VerifyPoCertChain {
         chain: Vec<u8>,
+    },
+
+    GenerateKeys,
+
+    /// Prepare and send CSR with the keys generated in previous steps to
+    /// Platform Owner for certification.
+    SendCsr {
+        request_pending: bool,
+        keypair: Option<Box<(RsaPrivateKey, RsaPublicKey)>>,
+    },
+
+    /// Verify resulting certificate
+    VerifyCertificate {
+        keypair: Box<(RsaPrivateKey, RsaPublicKey)>,
+        certificate: Vec<u8>,
     },
 
     /// Provisioning is complete. Main loop is responsible for switching mode
@@ -53,6 +69,9 @@ impl fmt::Display for State {
             Self::RequestPoCertChain { .. } => write!(f, "request po cert chain"),
             Self::SignalStatus { .. } => write!(f, "signal status"),
             Self::VerifyPoCertChain { .. } => write!(f, "verify po cert chain"),
+            Self::GenerateKeys => write!(f, "generate keys"),
+            Self::SendCsr { .. } => write!(f, "send CSR"),
+            Self::VerifyCertificate { .. } => write!(f, "verify certificate"),
             Self::Done => write!(f, "done"),
             Self::Idle { .. } => write!(f, "idle"),
         }
