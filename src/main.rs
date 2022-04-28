@@ -196,6 +196,7 @@ fn main() -> ! {
         // Pressing button for 10 s triggers Fobnail Token provisioning.
         if now - button_press_time > 10000
             && !matches!(operation_mode, OperationMode::TokenProvisioning(_))
+            && last_button_state
         {
             for _ in 0..3 {
                 let t = pal::timer::get_time_ms() as u64;
