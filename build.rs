@@ -1,42 +1,120 @@
 use std::{
     env,
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::Path,
 };
 
-fn main() -> Result<(), String> {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
-    let root_path = env::var_os("FOBNAIL_PO_ROOT").ok_or_else(|| "FOBNAIL_PO_ROOT variable must point to file containing PEM certificate to install as PO root".to_owned())?;
+use anyhow::{anyhow, bail, Context};
+use walkdir::WalkDir;
 
+fn main() -> anyhow::Result<()> {
+    let out_dir = env::var_os("OUT_DIR").unwrap();
+    let root_path = env::var_os("FOBNAIL_PO_ROOT")
+        .ok_or_else(|| anyhow::Error::msg("FOBNAIL_PO_ROOT variable be must point to file containing PEM certificate to install as PO root"))?;
+    let ek_cert_path = env::var_os("FOBNAIL_EK_ROOT_DIR");
+    // Additional root to install, used for testing Fobnail with TPM simulator.
+    let extra_ek_root = env::var_os("FOBNAIL_EXTRA_EK_ROOT");
+
+    println!("cargo:rerun-if-env-changed=FOBNAIL_PO_ROOT");
+    println!("cargo:rerun-if-env-changed=FOBNAIL_EK_ROOT_DIR");
+    println!("cargo:rerun-if-env-changed=FOBNAIL_EXTRA_EK_ROOT");
+
+    let root_ca_out = Path::new(&out_dir).join("embedded_certstore.rs");
+    let mut out_file = File::create(&root_ca_out)
+        .context(anyhow!("Failed to create {}", root_ca_out.display()))?;
+
+    out_file
+        .write_all(b"pub static EMBEDDED_CERTIFICATES: &[&[u8]] = &[\n")
+        .unwrap();
+
+    // Platform Owner certificate must be loaded first. certmgr assumes this is
+    // the first certificate in array.
+    load_cert(&mut out_file, &root_path)?;
+
+    // Install extra certificate first for faster lookup.
+    if let Some(extra_ek_root) = extra_ek_root {
+        let path = Path::new(&extra_ek_root);
+        println!("cargo:rerun-if-changed={}", path.display());
+
+        load_cert(&mut out_file, &extra_ek_root)
+            .context(anyhow!("Failed to load {}", path.display()))?;
+    }
+
+    if let Some(ek_cert_path) = ek_cert_path {
+        println!(
+            "cargo:rerun-if-changed={}",
+            Path::new(&ek_cert_path).display()
+        );
+        for entry in WalkDir::new(ek_cert_path).max_depth(1) {
+            let entry = entry?;
+            if entry.file_type().is_file() {
+                load_cert(&mut out_file, entry.path())
+                    .context(anyhow!("Failed to load {}", entry.path().display()))?;
+            }
+        }
+    }
+
+    out_file.write_all(b"];\n").unwrap();
+    out_file.flush()?;
+
+    Ok(())
+}
+
+/// Loads PEM certificate, converts it to DER and generates code ready for
+/// embedding.
+fn load_cert<W: Write, T: AsRef<Path> + ?Sized>(out: &mut W, cert_path: &T) -> anyhow::Result<()> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(false)
-        .open(&root_path)
-        .map_err(|e| format!("Failed to load Platform Owner root CA: {}", e))?;
-    println!("cargo:rerun-if-changed={}", root_path.to_string_lossy());
-    println!("cargo:rerun-if-env-changed=FOBNAIL_PO_ROOT");
+        .open(cert_path)
+        .context("Failed to load Platform Owner root CA")?;
+    println!("cargo:rerun-if-changed={}", cert_path.as_ref().display());
 
     let mut data = Vec::new();
-    file.read_to_end(&mut data).unwrap();
+    file.read_to_end(&mut data)?;
 
-    let mut decoded = Vec::new();
-    let mut decoder = pem_rfc7468::Decoder::new(&data).unwrap();
-    if decoder.type_label() != "CERTIFICATE" {
-        return Err(format!(
-            "Expected CERTIFICATE, got {}",
-            decoder.type_label()
-        ));
+    let mut error = anyhow!("Certificate is neither a valid PEM nor DER");
+    match decode_pem(&data) {
+        Ok(data) => {
+            error = anyhow!("Invalid PEM certificate");
+            validate_der_cert(&data).context(error)?;
+            write_cert(out, &data)?;
+            return Ok(());
+        }
+        Err(e) => {
+            error = e.context(error);
+        }
     }
 
-    let der = decoder.decode_to_end(&mut decoded).unwrap();
+    // If not a valid PEM then maybe it's PEM certificate.
+    validate_der_cert(&data).context(error)?;
+    write_cert(out, &data)?;
+    Ok(())
+}
 
-    let root_ca_out = Path::new(&out_dir).join("root_ca.rs");
-    let mut out_file = File::create(root_ca_out).unwrap();
+/// Check whether `data` is a valid DER-encoded certificate.
+fn validate_der_cert(data: &[u8]) -> Result<(), x509::der::Error> {
+    let mut decoder = x509::der::Decoder::new(data)?;
+    decoder.decode::<x509::Certificate>()?;
+    Ok(())
+}
 
-    out_file
-        .write_all(b"static PO_CHAIN_ROOT: &[u8] = &[\n")
-        .unwrap();
+/// Decodes PEM-encoded certificates and returns its DER representation.
+fn decode_pem(data: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut decoded = Vec::new();
+    let mut decoder = pem_rfc7468::Decoder::new(data)?;
+    if decoder.type_label() != "CERTIFICATE" {
+        bail!("Expected CERTIFICATE, got {}", decoder.type_label());
+    }
+
+    decoder.decode_to_end(&mut decoded)?;
+    Ok(decoded)
+}
+
+fn write_cert<W: Write>(out: &mut W, der: &[u8]) -> io::Result<()> {
+    out.write_all(b"    &[\n")?;
+
     for chunk in der.chunks(16) {
         struct H<'a>(&'a [u8]);
         impl std::fmt::Display for H<'_> {
@@ -47,12 +125,11 @@ fn main() -> Result<(), String> {
                 Ok(())
             }
         }
-        out_file
-            .write_all(format!("{}\n", H(chunk)).as_bytes())
-            .unwrap();
+
+        out.write_all(format!("        {}\n", H(chunk)).as_bytes())?;
     }
-    out_file.write_all(b"];\n").unwrap();
-    out_file.flush().unwrap();
+
+    out.write_all(b"    ],\n")?;
 
     Ok(())
 }

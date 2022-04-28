@@ -42,7 +42,10 @@ cfb-mode = { version = "0.8", default-features = false }
 aes = "0.8"
 
 [build-dependencies]
-pem-rfc7468 = { path = "external/formats/pem-rfc7468", features = ["alloc"] }
+pem-rfc7468 = { path = "external/formats/pem-rfc7468", features = ["std"] }
+anyhow = "1"
+walkdir = "2"
+x509 = { path = "external/formats/x509", features = ["std"] }
 
 [profile.dev]
 lto = "thin"
