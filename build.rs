@@ -7,13 +7,15 @@ use std::{
 
 fn main() -> Result<(), String> {
     let out_dir = env::var_os("OUT_DIR").unwrap();
+    let root_path = env::var_os("FOBNAIL_PO_ROOT").ok_or_else(|| "FOBNAIL_PO_ROOT variable must point to file containing PEM certificate to install as PO root".to_owned())?;
 
     let mut file = OpenOptions::new()
         .read(true)
         .write(false)
-        .open("root.crt")
+        .open(&root_path)
         .map_err(|e| format!("Failed to load Platform Owner root CA: {}", e))?;
-    println!("cargo:rerun-if-changed=root.crt");
+    println!("cargo:rerun-if-changed={}", root_path.to_string_lossy());
+    println!("cargo:rerun-if-env-changed=FOBNAIL_PO_ROOT");
 
     let mut data = Vec::new();
     file.read_to_end(&mut data).unwrap();
