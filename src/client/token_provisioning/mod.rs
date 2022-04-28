@@ -208,6 +208,7 @@ impl<'a> FobnailClient<'a> {
                 "Expected between {} and {} certificates but got {}",
                 MIN_CERTS, MAX_CERTS, num_certs
             );
+            return Err(());
         }
 
         let mut it = chain.certs.iter();
