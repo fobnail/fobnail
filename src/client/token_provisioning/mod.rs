@@ -92,6 +92,11 @@ impl<'a> FobnailClient<'a> {
                 }
             }
             State::SignalStatus { success } => {
+                // Volatile certs are not removed in verify_certchain because
+                // are needed to complete provisioning. Remove them here before
+                // retrying provisioning.
+                self.certmgr.clear_volatile_certs();
+
                 // TODO: signal status, probably should use different signaling
                 // than when provisioning platform
                 if *success {
@@ -225,19 +230,15 @@ impl<'a> FobnailClient<'a> {
                     }
                     Err(e) => {
                         error!("Cert verification failed: {}", e);
-                        certmgr.clear_volatile_certs();
                         return Err(());
                     }
                 },
                 Err(e) => {
                     error!("Invalid certificate: {}", e);
-                    certmgr.clear_volatile_certs();
                     return Err(());
                 }
             }
         }
-
-        // Don't remove volatile certs yet, we will need to them later.
 
         Ok(())
     }
