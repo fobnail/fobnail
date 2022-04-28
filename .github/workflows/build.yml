@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dummy Platform Owner root certificate
         run: |
-          cat <<EOF > $RUNNER_TEMP/root.crt
+          cat <<EOF > root.crt
           -----BEGIN CERTIFICATE-----
           MIIDrDCCApSgAwIBAgIUIRSoyB/JQj3aOV00vUZ0DROsQMAwDQYJKoZIhvcNAQEL
           BQAwXDELMAkGA1UEBhMCUEwxEDAOBgNVBAoMB0ZvYm5haWwxDjAMBgNVBAgMBVN0
@@ -51,11 +51,11 @@ jobs:
       - name: Build for PC target
         run: |
           export PATH=$PWD:$PATH
-          export FOBNAIL_PO_ROOT=$RUNNER_TEMP/root.crt
+          export FOBNAIL_PO_ROOT=root.crt
           ./build.sh --target pc
 
       - name: Build for nRF52 target
         run: |
           export PATH=$PWD:$PATH
-          export FOBNAIL_PO_ROOT=$RUNNER_TEMP/root.crt
+          export FOBNAIL_PO_ROOT=root.crt
           ./build.sh --target nrf
