@@ -13,6 +13,7 @@ fn main() -> Result<(), String> {
         .write(false)
         .open("root.crt")
         .map_err(|e| format!("Failed to load Platform Owner root CA: {}", e))?;
+    println!("cargo:rerun-if-changed=root.crt");
 
     let mut data = Vec::new();
     file.read_to_end(&mut data).unwrap();
