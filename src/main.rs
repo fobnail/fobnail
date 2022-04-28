@@ -65,7 +65,7 @@ where
 
 /// Checks whether we have any certificates installed in certstore. This is used
 /// to detect whether Fobnail has been provisioned.
-fn have_certchain<T>(trussed: &mut T) -> bool
+fn is_token_provisioned<T>(trussed: &mut T) -> bool
 where
     T: trussed::client::FilesystemClient,
 {
@@ -177,11 +177,11 @@ fn main() -> ! {
     let echo_socket_handle = socket_set.add(socket);
     let coap_socket_handle = socket_set.add(coap_socket);
 
-    let have_certchain = have_certchain(&mut trussed_fobnail_client);
+    let is_token_provisioned = is_token_provisioned(&mut trussed_fobnail_client);
     let have_rims = have_rims(&mut trussed_fobnail_client);
     let mut operation_mode = OperationMode::new(&mut trussed_fobnail_client);
 
-    operation_mode = if !have_certchain {
+    operation_mode = if !is_token_provisioned {
         operation_mode.token_provisioning()
     } else if !have_rims {
         operation_mode.provisioning()
