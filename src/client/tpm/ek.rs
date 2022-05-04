@@ -1,5 +1,5 @@
 use crate::{
-    certmgr::{CertMgr, X509Certificate},
+    certmgr::{CertMgr, VerifyMode, X509Certificate},
     client::proto,
 };
 
@@ -38,7 +38,15 @@ where
         .map(|(i, x)| (i == num_certs - 1, x))
     {
         match certmgr.load_cert_owned(cert) {
-            Ok(cert) => match certmgr.verify(trussed, &cert, crate::certmgr::VerifyMode::Ek) {
+            Ok(cert) => match certmgr.verify(
+                trussed,
+                &cert,
+                if is_leaf {
+                    VerifyMode::Ek
+                } else {
+                    VerifyMode::Normal
+                },
+            ) {
                 Ok(()) => {
                     if is_leaf {
                         // We are done, there is no need to inject EK as we won't

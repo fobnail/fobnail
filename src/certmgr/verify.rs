@@ -11,7 +11,12 @@ const X509V3_SUBJECT_ALTERNATIVE_NAME: ObjectIdentifier = ObjectIdentifier::new(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyMode {
-    /// Verify EK certificate.
+    /// Verify certificate that is neither EK nor PO, no special restrictions
+    /// are applied in this mode, except that certificate is required to be
+    /// X.509v3.
+    Normal,
+    /// Verify EK scertificate. This option enforces that TCG requirements
+    /// for EK certificate are met.
     Ek,
     /// Verify certificate from Platform Owner's chain.
     Po,
@@ -72,6 +77,11 @@ impl CertMgr {
                     return Err(Error::DoesNotMeetPoRequirements);
                 }
             }
+            VerifyMode::Normal => {
+                if certificate.version() != 3 {
+                    return Err(Error::NotX509v3);
+                }
+            }
         }
 
         let mut current_child: MaybeOwned<X509Certificate> = MaybeOwned::from(certificate);
@@ -105,8 +115,8 @@ impl CertMgr {
                             });
                         }
                     }
-                    VerifyMode::Ek => {
-                        // EK cannot be signed by PO root.
+                    VerifyMode::Ek | VerifyMode::Normal => {
+                        // Only PO certificates may be signed by PO root.
                         if current_child.get().certificate_raw() == Self::po_root_raw() {
                             return Err(Error::UnexpectedRoot {
                                 expected_root: "EK",
