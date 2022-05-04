@@ -77,7 +77,7 @@ pub struct CoapClient<'a> {
 }
 impl<'a> CoapClient<'a> {
     pub const COAP_DEFAULT_PORT: u16 = 5683;
-    pub const DEFAULT_TIMEOUT: u64 = 1000; // 1 second
+    pub const DEFAULT_TIMEOUT: u64 = 3000; // 1 second
     /// Default block size when using blockwise transfers. Must be power-of-two.
     /// FIXME: when using 1024 block size network tends to lockup - processing
     /// of all packets fails with

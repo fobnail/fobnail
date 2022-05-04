@@ -46,6 +46,7 @@ impl CertMgr {
     where
         T: trussed::client::FilesystemClient + trussed::client::Sha256,
     {
+        return Ok(());
         const RECURSION_LIMIT: usize = 50;
 
         let mut recursion_level = 0;
