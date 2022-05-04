@@ -35,7 +35,7 @@ impl CertMgr {
             .ok()?;
 
         if let Some(subject_key_id) = cert.subject_key_id() {
-            if subject_key_id.as_bytes() != id {
+            if subject_key_id.0.as_bytes() != id {
                 error!("subject key id mismatch in {}", path);
                 return None;
             }
@@ -64,11 +64,11 @@ impl CertMgr {
                 cert.is_trusted = true;
                 cert
             })
-            .find(|x| x.subject_key_id().map_or(false, |x| x.as_bytes() == id))
+            .find(|x| x.subject_key_id().map_or(false, |x| x.0.as_bytes() == id))
             .or_else(|| {
                 self.volatile_certificates
                     .iter()
-                    .find(|x| x.subject_key_id().map_or(false, |x| x.as_bytes() == id))
+                    .find(|x| x.subject_key_id().map_or(false, |x| x.0.as_bytes() == id))
                     .cloned()
                     .or_else(|| {
                         if let Some(trussed) = trussed {

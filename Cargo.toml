@@ -21,8 +21,8 @@ trussed = { path = "external/trussed" }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
 rsa = { version = "0.5", default-features = false, features = ["alloc"] }
-x509 = { path = "external/formats/x509" }
-x501 = { path = "external/formats/x501" }
+spki = { path = "external/formats/spki" }
+x509-cert = { path = "external/formats/x509" }
 der = { path = "external/formats/der" }
 
 # TODO: remove these dependencies after RSA gets moved to Trussed.
@@ -45,7 +45,7 @@ aes = "0.8"
 pem-rfc7468 = { path = "external/formats/pem-rfc7468", features = ["std"] }
 anyhow = "1"
 walkdir = "2"
-x509 = { path = "external/formats/x509", features = ["std"] }
+x509-cert = { path = "external/formats/x509", features = ["std"] }
 
 [profile.dev]
 lto = "thin"

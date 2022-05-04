@@ -94,9 +94,9 @@ fn load_cert<W: Write, T: AsRef<Path> + ?Sized>(out: &mut W, cert_path: &T) -> a
 }
 
 /// Check whether `data` is a valid DER-encoded certificate.
-fn validate_der_cert(data: &[u8]) -> Result<(), x509::der::Error> {
-    let mut decoder = x509::der::Decoder::new(data)?;
-    decoder.decode::<x509::Certificate>()?;
+fn validate_der_cert(data: &[u8]) -> Result<(), x509_cert::der::Error> {
+    let mut decoder = x509_cert::der::Decoder::new(data)?;
+    decoder.decode::<x509_cert::Certificate>()?;
     Ok(())
 }
 

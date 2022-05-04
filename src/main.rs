@@ -15,6 +15,8 @@ extern crate log;
 #[macro_use]
 extern crate alloc;
 
+extern crate x509_cert as x509;
+
 use client::{attestation, provisioning, token_provisioning};
 use pal::led::{self, Led};
 use smoltcp::iface::{EthernetInterfaceBuilder, Neighbor, NeighborCache};

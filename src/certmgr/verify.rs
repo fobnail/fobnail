@@ -1,13 +1,13 @@
-use der::Decodable;
-use x509::{KeyUsage, KeyUsages, ObjectIdentifier};
+use der::{oid::ObjectIdentifier, Decode};
+use x509::ext::pkix::{BasicConstraints, KeyUsage, KeyUsages};
 
 use super::{CertMgr, Error, Result, X509Certificate};
 use crate::certmgr::HashAlgorithm;
 use rsa::PublicKey as _;
 
-const X509V3_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new("2.5.29.19");
-const X509V3_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new("2.5.29.15");
-const X509V3_SUBJECT_ALTERNATIVE_NAME: ObjectIdentifier = ObjectIdentifier::new("2.5.29.17");
+const X509V3_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.19");
+const X509V3_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.15");
+const X509V3_SUBJECT_ALTERNATIVE_NAME: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.17");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyMode {
@@ -201,6 +201,7 @@ impl CertMgr {
                     // TODO: probably should do something with other flags too.
 
                     let have_key_encipherment = key_usage
+                        .0
                         .into_iter()
                         .any(|x| x == KeyUsages::KeyEncipherment);
                     if !have_key_encipherment {
@@ -264,7 +265,7 @@ impl CertMgr {
             .extensions()
             .and_then(|x| x.iter().find(|x| x.extn_id == X509V3_CONSTRAINTS))
         {
-            match x509::BasicConstraints::from_der(constraints.extn_value) {
+            match BasicConstraints::from_der(constraints.extn_value) {
                 Ok(constraints) => {
                     if constraints.ca {
                         if let Some(path_len) = constraints.path_len_constraint {
@@ -336,7 +337,7 @@ impl CertMgr {
             // and Subject Key ID must be the same.
             if let Some(auth_key_id) = child.authority_key_id().and_then(|x| x.key_identifier) {
                 if let Some(subj_key_id) = child.subject_key_id() {
-                    if auth_key_id != subj_key_id {
+                    if auth_key_id != subj_key_id.0 {
                         return Ok(false);
                     }
                 }

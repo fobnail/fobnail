@@ -8,7 +8,7 @@ pub type Result<T> = ::core::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     X509(x509::der::Error),
-    X509Spki(x509::spki::Error),
+    X509Spki(spki::Error),
     CustomStatic(&'static str),
     ExceededRecursionLimit,
     IssuerNotFound,
@@ -28,8 +28,8 @@ impl From<x509::der::Error> for Error {
     }
 }
 
-impl From<x509::spki::Error> for Error {
-    fn from(e: x509::spki::Error) -> Self {
+impl From<spki::Error> for Error {
+    fn from(e: spki::Error) -> Self {
         Self::X509Spki(e)
     }
 }

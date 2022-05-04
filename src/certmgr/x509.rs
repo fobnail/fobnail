@@ -2,11 +2,19 @@ use core::{fmt, mem::ManuallyDrop};
 
 use super::{Error, HashAlgorithm, Key, Result, Signature};
 use alloc::vec::Vec;
-use der::Decodable;
+use der::{
+    oid::{
+        db::{
+            rfc2256::STATE_OR_PROVINCE_NAME,
+            rfc4519::{COUNTRY_NAME, ORGANIZATION_NAME},
+        },
+        ObjectIdentifier,
+    },
+    Decode,
+};
 use x509::{
     der::{asn1::UIntBytes, Length, Sequence, Tag, Tagged},
-    AuthorityKeyIdentifier, ObjectIdentifier, SubjectKeyIdentifier, PKIX_AT_COUNTRYNAME,
-    PKIX_AT_ORGANIZATIONNAME, PKIX_AT_STATEORPROVINCENAME,
+    ext::pkix::{AuthorityKeyIdentifier, SubjectKeyIdentifier},
 };
 
 /// Structure representing either or issuer or subject.
@@ -105,7 +113,7 @@ impl<'a> X509Certificate<'a> {
     }
 
     pub fn key(&self) -> Result<Key> {
-        const OID_RSA: ObjectIdentifier = ObjectIdentifier::new("1.2.840.113549.1.1.1");
+        const OID_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 
         let info = &self.inner.tbs_certificate.subject_public_key_info;
         match info.algorithm.oid {
@@ -138,13 +146,13 @@ impl<'a> X509Certificate<'a> {
 
     pub fn signature(&self) -> Result<Signature> {
         const OID_SHA224_WITH_RSA: ObjectIdentifier =
-            ObjectIdentifier::new("1.2.840.113549.1.1.14");
+            ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.14");
         const OID_SHA256_WITH_RSA: ObjectIdentifier =
-            ObjectIdentifier::new("1.2.840.113549.1.1.11");
+            ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11");
         const OID_SHA384_WITH_RSA: ObjectIdentifier =
-            ObjectIdentifier::new("1.2.840.113549.1.1.12");
+            ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.12");
         const OID_SHA512_WITH_RSA: ObjectIdentifier =
-            ObjectIdentifier::new("1.2.840.113549.1.1.13");
+            ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.13");
 
         let get_rsa_signature = || -> Result<&[u8]> {
             self.inner
@@ -193,7 +201,7 @@ impl<'a> X509Certificate<'a> {
             pub signature: &'a [u8],
         }
 
-        impl<'a> Decodable<'a> for DeferDecodeCertificate<'a> {
+        impl<'a> Decode<'a> for DeferDecodeCertificate<'a> {
             fn decode(decoder: &mut der::Decoder<'a>) -> der::Result<DeferDecodeCertificate<'a>> {
                 decoder.sequence(|decoder| {
                     let tbs_certificate = decoder.tlv_bytes()?;
@@ -215,37 +223,37 @@ impl<'a> X509Certificate<'a> {
     }
 
     /// Returns an array of X.509v3 extensions.
-    pub fn extensions(&self) -> Option<&x509::Extensions> {
+    pub fn extensions(&self) -> Option<&x509::ext::Extensions> {
         self.inner.tbs_certificate.extensions.as_ref()
     }
 
     /// Lookups X.509v3 extensions by its OID.
-    pub fn extension(&self, oid: ObjectIdentifier) -> Option<&x509::Extension> {
+    pub fn extension(&self, oid: ObjectIdentifier) -> Option<&x509::ext::Extension> {
         self.extensions()?.iter().find(|x| x.extn_id == oid)
     }
 
     /// Obtain X.509v3 Authority Key Identifier
     pub fn authority_key_id(&self) -> Option<AuthorityKeyIdentifier> {
-        let extension = self.extension(ObjectIdentifier::new("2.5.29.35"))?;
+        let extension = self.extension(ObjectIdentifier::new_unwrap("2.5.29.35"))?;
         let key_id = AuthorityKeyIdentifier::from_der(extension.extn_value).ok()?;
         Some(key_id)
     }
 
     /// Obtain X.509v3 Subject Key Identifier
     pub fn subject_key_id(&self) -> Option<SubjectKeyIdentifier> {
-        let extension = self.extension(ObjectIdentifier::new("2.5.29.14"))?;
+        let extension = self.extension(ObjectIdentifier::new_unwrap("2.5.29.14"))?;
         let key_id = SubjectKeyIdentifier::from_der(extension.extn_value).ok()?;
         Some(key_id)
     }
 }
 
-fn parse_issuer_subject<'r>(name: &'r x501::name::Name) -> Result<IssuerSubject<'r>> {
+fn parse_issuer_subject<'r>(name: &'r x509::name::Name) -> Result<IssuerSubject<'r>> {
     let mut country = None;
     let mut state = None;
     let mut organization = None;
 
-    for x in name.iter() {
-        for y in x.iter() {
+    for x in name.0.iter() {
+        for y in x.0.iter() {
             macro_rules! getstr {
                 ($target:expr) => {
                     if let Some(x) = parse_string(&y.value) {
@@ -262,13 +270,13 @@ fn parse_issuer_subject<'r>(name: &'r x501::name::Name) -> Result<IssuerSubject<
             }
 
             match y.oid {
-                PKIX_AT_COUNTRYNAME => {
+                COUNTRY_NAME => {
                     getstr!(country);
                 }
-                PKIX_AT_STATEORPROVINCENAME => {
+                STATE_OR_PROVINCE_NAME => {
                     getstr!(state);
                 }
-                PKIX_AT_ORGANIZATIONNAME => {
+                ORGANIZATION_NAME => {
                     getstr!(organization);
                 }
                 oid => {
