@@ -1,6 +1,6 @@
 use core::fmt;
 
-use trussed::types::{Location, PathBuf};
+use trussed::types::{Location, Message, PathBuf};
 
 use super::{CertMgr, X509Certificate};
 
@@ -78,5 +78,32 @@ impl CertMgr {
                         }
                     })
             })
+    }
+
+    /// Save the given certificate in persistent storage.
+    pub fn save_certificate<T>(
+        &self,
+        trussed: &mut T,
+        cert: &X509Certificate,
+        name: &str,
+    ) -> Result<(), ()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        let cert_raw = cert.certificate_raw();
+
+        let path = format!("/cert/{}", name);
+        match trussed::try_syscall!(trussed.write_file(
+            Location::Internal,
+            PathBuf::from(path.as_bytes()),
+            Message::from_slice(cert_raw).map_err(|_| error!("Certificate is too big"))?,
+            None,
+        )) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                error!("Failed to write {}", path);
+                Err(())
+            }
+        }
     }
 }

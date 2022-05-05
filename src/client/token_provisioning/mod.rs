@@ -1,12 +1,13 @@
 use core::cell::RefCell;
 
 use crate::{
-    certmgr::CertMgr,
+    certmgr::{CertMgr, Key},
     coap::{CoapClient, Error},
 };
 use alloc::{boxed::Box, rc::Rc};
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
+use rsa::PublicKeyParts;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use state::State;
 
@@ -159,8 +160,23 @@ impl<'a> FobnailClient<'a> {
                     coap_request!(RequestType::Post, "csr", raw req);
                 }
             }
-            State::VerifyCertificate { .. } => {
-                todo!()
+            State::VerifyCertificate {
+                certificate,
+                keypair,
+            } => {
+                let mut trussed = self.trussed.borrow_mut();
+                match Self::verify_certificate(
+                    *trussed,
+                    &mut self.certmgr,
+                    &certificate,
+                    &keypair.1,
+                ) {
+                    Ok(()) => {
+                        info!("Fobnail provisioning complete");
+                        state.done();
+                    }
+                    Err(()) => state.error(),
+                }
             }
         }
     }
@@ -289,6 +305,51 @@ impl<'a> FobnailClient<'a> {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    /// Verify generated Identity/Encryption certificate. If verification is
+    /// successful save it to persistent storage, completing Fobnail token
+    /// provisioning.
+    fn verify_certificate<T>(
+        trussed: &mut T,
+        certmgr: &mut CertMgr,
+        cert_raw: &[u8],
+        public_key: &rsa::RsaPublicKey,
+    ) -> Result<(), ()>
+    where
+        T: trussed::client::FilesystemClient + trussed::client::Sha256,
+    {
+        let cert = certmgr.load_cert(cert_raw).map_err(|e| error!("{}", e))?;
+        certmgr
+            .verify(trussed, &cert, crate::certmgr::VerifyMode::TokenCert)
+            .map_err(|e| error!("{}", e))?;
+
+        let cert_key = cert.key().map_err(|e| error!("{}", e))?;
+
+        let mut exponent_bytes = [0u8; 4];
+        let e = public_key.e().to_bytes_be();
+        if e.is_empty() || e.len() > 4 {
+            return Err(());
+        }
+        let l = e.len();
+        exponent_bytes[4 - l..].copy_from_slice(&e);
+        let expected_exponent = exponent_bytes;
+
+        match cert_key {
+            Key::Rsa { n, e } => {
+                if n != public_key.n().to_bytes_be() || e.to_be_bytes() != expected_exponent {
+                    error!("Generated certificate public key mismatch");
+
+                    return Err(());
+                }
+            }
+        }
+
+        certmgr
+            .save_certificate(trussed, &cert, "token_cert")
+            .map_err(|()| error!("Could not save certificate in persistent storage"))?;
 
         Ok(())
     }

@@ -20,6 +20,9 @@ pub enum VerifyMode {
     Ek,
     /// Verify certificate from Platform Owner's chain.
     Po,
+    /// Verify Fobnail token identity/encryption certificate. Similar to normal
+    /// mode except that cert must be rooted in PO root.
+    TokenCert,
 }
 
 enum MaybeOwned<'a, T> {
@@ -77,7 +80,7 @@ impl CertMgr {
                     return Err(Error::DoesNotMeetPoRequirements);
                 }
             }
-            VerifyMode::Normal => {
+            VerifyMode::Normal | VerifyMode::TokenCert => {
                 if certificate.version() != 3 {
                     return Err(Error::NotX509v3);
                 }
@@ -106,7 +109,7 @@ impl CertMgr {
                 }
 
                 match mode {
-                    VerifyMode::Po => {
+                    VerifyMode::Po | VerifyMode::TokenCert => {
                         // Last check, make sure that the root is Platform Owner's
                         // root and not some other root.
                         if current_child.get().certificate_raw() != Self::po_root_raw() {
