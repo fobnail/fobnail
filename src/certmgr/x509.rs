@@ -1,7 +1,7 @@
 use core::{fmt, mem::ManuallyDrop};
 
 use super::{Error, HashAlgorithm, Key, Result, Signature};
-use alloc::vec::Vec;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use der::{
     oid::{
         db::{
@@ -43,38 +43,65 @@ impl fmt::Display for IssuerSubject<'_> {
     }
 }
 
-#[derive(Clone)]
-pub struct X509Certificate<'a> {
+struct X509CertInner<'a> {
     // These fields are kept because we need to extract raw TBS certificate to
     // verify signature. Keeping reference theoretically could result in
-    // undefined behaviour when dropping X509Certificate - in drop() we destroy
+    // undefined behaviour when dropping X509CertInner - in drop() we destroy
     // `owned` field which causes reference to become invalid, Rust forbids
     // invalid references, having one (even if it's not used) is considered UB.
     raw_certificate: *const u8,
     raw_certificate_len: usize,
     inner: ManuallyDrop<x509::Certificate<'a>>,
-    // Must be put after inner, so it's dropped later
-    // Dropping this before inner will result in UB
-    // Since there is an active borrow (from inner) owned cannot
-    // be mutated.
-    owned: Option<ManuallyDrop<Vec<u8>>>,
+    owned: Option<*mut [u8]>,
+}
+
+impl Drop for X509CertInner<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            // SAFETY: self.inner is known to be valid (hasn't been dropped
+            // before). This must be dropped before self.owned.
+            ManuallyDrop::drop(&mut self.inner);
+
+            if let Some(owned) = self.owned.take() {
+                // SAFETY: pointer was obtained through Box::into_raw()
+                let b = Box::from_raw(owned);
+                drop(b);
+            }
+        }
+    }
+}
+
+pub struct X509Certificate<'a> {
+    inner: Arc<X509CertInner<'a>>,
     pub(super) is_trusted: bool,
+}
+
+impl Clone for X509Certificate<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            is_trusted: self.is_trusted,
+        }
+    }
 }
 
 impl<'a> X509Certificate<'a> {
     pub fn parse_owned(data: Vec<u8>) -> Result<Self> {
-        let slice = unsafe { ::core::slice::from_raw_parts(data.as_ptr(), data.len()) };
+        let data = Box::into_raw(data.into_boxed_slice());
+
+        let slice = unsafe { &*data };
         let mut decoder = x509::der::Decoder::new(slice)?;
         let cert = decoder.decode::<x509::Certificate>()?;
-
-        Ok(Self {
+        let inner = X509CertInner {
             inner: ManuallyDrop::new(cert),
-            owned: Some(ManuallyDrop::new(data)),
-            // Certificates loaded from memory are never trusted. Only
-            // certificate loaded from persistent storage may be trusted.
-            is_trusted: false,
+            owned: Some(data),
             raw_certificate: slice.as_ptr(),
             raw_certificate_len: slice.len(),
+        };
+
+        Ok(Self {
+            inner: Arc::new(inner),
+            is_trusted: false,
         })
     }
 
@@ -83,19 +110,21 @@ impl<'a> X509Certificate<'a> {
         let cert = decoder.decode::<x509::Certificate>()?;
 
         Ok(Self {
-            inner: ManuallyDrop::new(cert),
-            owned: None,
+            inner: Arc::new(X509CertInner {
+                inner: ManuallyDrop::new(cert),
+                owned: None,
+                raw_certificate: data.as_ptr(),
+                raw_certificate_len: data.len(),
+            }),
             // Certificates loaded from memory are never trusted. Only
             // certificate loaded from persistent storage may be trusted.
             is_trusted: false,
-            raw_certificate: data.as_ptr(),
-            raw_certificate_len: data.len(),
         })
     }
 
     #[inline]
     pub fn version(&self) -> u8 {
-        match self.inner.tbs_certificate.version {
+        match self.inner.inner.tbs_certificate.version {
             x509::Version::V1 => 1,
             x509::Version::V2 => 2,
             x509::Version::V3 => 3,
@@ -104,18 +133,18 @@ impl<'a> X509Certificate<'a> {
 
     #[inline]
     pub fn issuer(&self) -> Result<IssuerSubject> {
-        parse_issuer_subject(&self.inner.tbs_certificate.issuer)
+        parse_issuer_subject(&self.inner.inner.tbs_certificate.issuer)
     }
 
     #[inline]
     pub fn subject(&self) -> Result<IssuerSubject> {
-        parse_issuer_subject(&self.inner.tbs_certificate.subject)
+        parse_issuer_subject(&self.inner.inner.tbs_certificate.subject)
     }
 
     pub fn key(&self) -> Result<Key> {
         const OID_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 
-        let info = &self.inner.tbs_certificate.subject_public_key_info;
+        let info = &self.inner.inner.tbs_certificate.subject_public_key_info;
         match info.algorithm.oid {
             OID_RSA => {
                 info.algorithm
@@ -156,12 +185,13 @@ impl<'a> X509Certificate<'a> {
 
         let get_rsa_signature = || -> Result<&[u8]> {
             self.inner
+                .inner
                 .signature
                 .as_bytes()
                 .ok_or(Error::CustomStatic("Invalid signature length"))
         };
 
-        match self.inner.signature_algorithm.oid {
+        match self.inner.inner.signature_algorithm.oid {
             OID_SHA224_WITH_RSA => {
                 // RSA signature size always matches
                 Ok(Signature::rsa(HashAlgorithm::Sha224, get_rsa_signature()?))
@@ -181,8 +211,9 @@ impl<'a> X509Certificate<'a> {
     pub fn certificate_raw(&self) -> &[u8] {
         // SAFETY: self.raw_certificate refers to data that is valid until we
         // call drop()
-        let data =
-            unsafe { core::slice::from_raw_parts(self.raw_certificate, self.raw_certificate_len) };
+        let data = unsafe {
+            core::slice::from_raw_parts(self.inner.raw_certificate, self.inner.raw_certificate_len)
+        };
         data
     }
 
@@ -191,8 +222,9 @@ impl<'a> X509Certificate<'a> {
     pub fn tbs_certificate_raw(&self) -> Result<&[u8]> {
         // SAFETY: self.raw_certificate refers to data that is valid until we
         // call drop()
-        let data =
-            unsafe { core::slice::from_raw_parts(self.raw_certificate, self.raw_certificate_len) };
+        let data = unsafe {
+            core::slice::from_raw_parts(self.inner.raw_certificate, self.inner.raw_certificate_len)
+        };
 
         ///Structure supporting deferred decoding of fields in the Certificate SEQUENCE
         pub struct DeferDecodeCertificate<'a> {
@@ -224,7 +256,7 @@ impl<'a> X509Certificate<'a> {
 
     /// Returns an array of X.509v3 extensions.
     pub fn extensions(&self) -> Option<&x509::ext::Extensions> {
-        self.inner.tbs_certificate.extensions.as_ref()
+        self.inner.inner.tbs_certificate.extensions.as_ref()
     }
 
     /// Lookups X.509v3 extensions by its OID.
@@ -300,20 +332,6 @@ fn parse_string<'r>(data: &'r x509::der::asn1::Any) -> Option<&'r str> {
         .or_else(|_| data.printable_string().map(|x| x.as_str()))
         .ok()?;
     Some(s)
-}
-
-impl<'a> Drop for X509Certificate<'a> {
-    fn drop(&mut self) {
-        unsafe {
-            // Data is referenced by inner and must be dropped after inner,
-            // otherwise we may get UB.
-
-            ManuallyDrop::drop(&mut self.inner);
-            if let Some(mut data) = self.owned.take() {
-                ManuallyDrop::drop(&mut data)
-            }
-        }
-    }
 }
 
 #[derive(Sequence)]
