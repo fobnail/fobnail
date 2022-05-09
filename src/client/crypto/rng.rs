@@ -8,13 +8,13 @@ where
     fn next_u32(&mut self) -> u32 {
         let mut buf = [0u8; 4];
         self.fill_bytes(&mut buf[..]);
-        u32::from_be_bytes(buf)
+        u32::from_ne_bytes(buf)
     }
 
     fn next_u64(&mut self) -> u64 {
         let mut buf = [0u8; 8];
         self.fill_bytes(&mut buf[..]);
-        u64::from_be_bytes(buf)
+        u64::from_ne_bytes(buf)
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
