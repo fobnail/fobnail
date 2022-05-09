@@ -2,16 +2,20 @@ use core::cell::RefCell;
 
 use crate::{
     certmgr::{CertMgr, Key},
+    client::crypto::Ed25519Key,
     coap::{CoapClient, Error},
 };
-use alloc::{boxed::Box, rc::Rc};
+use alloc::rc::Rc;
 use coap_lite::{MessageClass, Packet, RequestType, ResponseType};
 use pal::timer::get_time_ms;
-use rsa::PublicKeyParts;
 use smoltcp::socket::{SocketRef, UdpSocket};
 use state::State;
+use trussed::{
+    api::reply::SerializeKey,
+    types::{KeyId, KeySerialization, Location, Mechanism},
+};
 
-use super::{crypto, proto, util::handle_server_error_response};
+use super::{proto, util::handle_server_error_response};
 
 mod csr;
 mod state;
@@ -19,7 +23,7 @@ mod state;
 /// Client which speaks to the Platform Owner in order to perform Fobnail Token
 /// provisioning.
 pub struct FobnailClient<'a> {
-    state: Rc<RefCell<State>>,
+    state: Rc<RefCell<State<'a>>>,
     coap_client: CoapClient<'a>,
     trussed: RefCell<&'a mut trussed::ClientImplementation<pal::trussed::Syscall>>,
     certmgr: CertMgr,
@@ -140,36 +144,34 @@ impl<'a> FobnailClient<'a> {
             }
             State::GenerateKeys => {
                 let mut trussed = self.trussed.borrow_mut();
-                let keypair = Box::new(crypto::generate_rsa_key(*trussed, 2048));
+                let key = Ed25519Key::generate(*trussed, Location::Volatile).unwrap();
 
                 *state = State::SendCsr {
                     request_pending: false,
-                    keypair: Some(keypair),
+                    key: Some(key),
                 }
             }
             State::SendCsr {
                 request_pending,
-                keypair,
+                key,
             } => {
                 if !*request_pending {
                     *request_pending = true;
 
-                    let keypair = keypair.as_ref().unwrap();
+                    let mut trussed = self.trussed.borrow_mut();
 
-                    let req = csr::make_csr(&keypair.0, &keypair.1, pal::device_id()).unwrap();
+                    let req = csr::make_csr(*trussed, key.as_ref().unwrap().id(), pal::device_id())
+                        .unwrap();
                     coap_request!(RequestType::Post, "csr", raw req);
                 }
             }
-            State::VerifyCertificate {
-                certificate,
-                keypair,
-            } => {
+            State::VerifyCertificate { certificate, key } => {
                 let mut trussed = self.trussed.borrow_mut();
                 match Self::verify_certificate(
                     *trussed,
                     &mut self.certmgr,
-                    &certificate,
-                    &keypair.1,
+                    certificate,
+                    key.as_ref().unwrap().id(),
                 ) {
                     Ok(()) => {
                         info!("Fobnail provisioning complete");
@@ -177,6 +179,14 @@ impl<'a> FobnailClient<'a> {
                     }
                     Err(()) => state.error(),
                 }
+            }
+            State::DeleteKey { key, success } => {
+                let mut trussed = self.trussed.borrow_mut();
+                if let Some(key) = key.take() {
+                    key.delete(*trussed);
+                }
+
+                *state = State::SignalStatus { success: *success }
             }
         }
     }
@@ -202,7 +212,8 @@ impl<'a> FobnailClient<'a> {
             | State::SignalStatus { .. }
             | State::VerifyPoCertChain { .. }
             | State::GenerateKeys
-            | State::VerifyCertificate { .. } => {
+            | State::VerifyCertificate { .. }
+            | State::DeleteKey { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
@@ -234,10 +245,10 @@ impl<'a> FobnailClient<'a> {
                     state.error();
                 }
             }
-            State::SendCsr { keypair, .. } => {
+            State::SendCsr { key, .. } => {
                 if result.header.code == MessageClass::Response(ResponseType::Created) {
                     *state = State::VerifyCertificate {
-                        keypair: keypair.take().unwrap(),
+                        key: key.take(),
                         certificate: result.payload,
                     }
                 } else {
@@ -316,10 +327,12 @@ impl<'a> FobnailClient<'a> {
         trussed: &mut T,
         certmgr: &mut CertMgr,
         cert_raw: &[u8],
-        public_key: &rsa::RsaPublicKey,
+        key: KeyId,
     ) -> Result<(), ()>
     where
-        T: trussed::client::FilesystemClient + trussed::client::Sha256,
+        T: trussed::client::FilesystemClient
+            + trussed::client::Sha256
+            + trussed::client::CryptoClient,
     {
         let cert = certmgr.load_cert(cert_raw).map_err(|e| error!("{}", e))?;
         certmgr
@@ -327,23 +340,25 @@ impl<'a> FobnailClient<'a> {
             .map_err(|e| error!("{}", e))?;
 
         let cert_key = cert.key().map_err(|e| error!("{}", e))?;
-
-        let mut exponent_bytes = [0u8; 4];
-        let e = public_key.e().to_bytes_be();
-        if e.is_empty() || e.len() > 4 {
-            return Err(());
-        }
-        let l = e.len();
-        exponent_bytes[4 - l..].copy_from_slice(&e);
-        let expected_exponent = exponent_bytes;
-
         match cert_key {
-            Key::Rsa { n, e } => {
-                if n != public_key.n().to_bytes_be() || e.to_be_bytes() != expected_exponent {
-                    error!("Generated certificate public key mismatch");
+            Key::Ed25519(cert_key) => {
+                let SerializeKey {
+                    serialized_key: key,
+                } = trussed::try_syscall!(trussed.serialize_key(
+                    Mechanism::Ed255,
+                    key,
+                    KeySerialization::Raw
+                ))
+                .map_err(|e| error!("Trussed key serialization failed: {:?}", e))?;
 
+                if key.as_slice() != cert_key {
+                    error!("Generated certificate public key mismatch");
                     return Err(());
                 }
+            }
+            _ => {
+                error!("Generated certificate algorithm mismatch");
+                return Err(());
             }
         }
 

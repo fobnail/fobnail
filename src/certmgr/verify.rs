@@ -1,4 +1,8 @@
 use der::{oid::ObjectIdentifier, Decode};
+use trussed::{
+    api::reply::{DeserializeKey, Verify},
+    types::{KeySerialization, Location, Mechanism, SignatureSerialization, StorageAttributes},
+};
 use x509::ext::pkix::{BasicConstraints, KeyUsage, KeyUsages};
 
 use super::{CertMgr, Error, Result, X509Certificate};
@@ -311,7 +315,7 @@ impl CertMgr {
         depth: usize,
     ) -> Result<bool>
     where
-        T: trussed::client::Sha256,
+        T: trussed::client::CryptoClient + trussed::client::Sha256,
     {
         // TODO: verify whether child issuer matches with parent subject.
 
@@ -358,6 +362,7 @@ impl CertMgr {
             return Ok(false);
         }
 
+        let tbs_raw = child.tbs_certificate_raw()?;
         match parent_key {
             crate::certmgr::Key::Rsa { n, e } => {
                 let key = rsa::RsaPublicKey::new(
@@ -365,8 +370,6 @@ impl CertMgr {
                     rsa::BigUint::from_slice(&[e]),
                 )
                 .unwrap();
-
-                let tbs_raw = child.tbs_certificate_raw()?;
 
                 match signature.hash_algo {
                     HashAlgorithm::Sha256 => {
@@ -386,6 +389,32 @@ impl CertMgr {
                     }
                     _ => Err(Error::CustomStatic("Unsupported hash algorithm")),
                 }
+            }
+            crate::certmgr::Key::Ed25519(key) => {
+                let DeserializeKey { key } = trussed::try_syscall!(trussed.deserialize_key(
+                    Mechanism::Ed255,
+                    key,
+                    KeySerialization::Raw,
+                    StorageAttributes {
+                        persistence: Location::Volatile,
+                    },
+                ))
+                .map_err(|_| Error::CustomStatic("Invalid ed25519 key"))?;
+
+                let verification_result = trussed::try_syscall!(trussed.verify(
+                    Mechanism::Ed255,
+                    key,
+                    tbs_raw,
+                    signature.as_bytes(),
+                    SignatureSerialization::Raw,
+                ));
+
+                trussed::syscall!(trussed.delete(key));
+                let Verify { valid } = verification_result.map_err(|_| {
+                    Error::CustomStatic("Trussed error while verifying ed25519 signature")
+                })?;
+
+                Ok(valid)
             }
         }
     }

@@ -50,6 +50,10 @@ where
                 }
             }
         }
+        crypto::Key::Ed25519 { .. } => {
+            error!("Ed25519 signed objects are not supported");
+            Err(())
+        }
     }
 }
 

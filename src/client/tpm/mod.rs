@@ -164,6 +164,10 @@ where
 
             Ok((secret_copy, id_object, encrypted_secret))
         }
+        crate::certmgr::Key::Ed25519 { .. } => {
+            error!("Credential Activation with Ed25519 is not supported");
+            Err(())
+        }
     }
 }
 

@@ -1,78 +1,55 @@
 use alloc::vec::Vec;
 use der::{
-    asn1::{BitString, SetOfVec, UIntBytes},
+    asn1::{BitString, SetOfVec},
     oid::db::rfc4519::{ORGANIZATION_NAME, SERIAL_NUMBER},
-    Any, Encode, Sequence, Tag,
+    Any, Encode, Tag,
 };
-use rsa::{PublicKeyParts, RsaPrivateKey, RsaPublicKey};
-use sha2::Digest;
 use spki::{AlgorithmIdentifier, ObjectIdentifier, SubjectPublicKeyInfo};
+use trussed::{
+    api::reply::{SerializeKey, Sign},
+    types::{KeyId, KeySerialization, Mechanism, Signature, SignatureSerialization},
+};
 use x509::{
     attr::AttributeTypeAndValue,
     name::{DistinguishedName, RdnSequence, RelativeDistinguishedName},
     request::{CertReq, CertReqInfo, Version},
 };
 
-/// Encode RSA public key in ASN.1
-fn rsa_asn1_encode(key: &RsaPublicKey) -> Result<Vec<u8>, ()> {
-    #[derive(Sequence)]
-    struct RsaPublicKey<'a> {
-        pub n: UIntBytes<'a>,
-        pub e: UIntBytes<'a>,
-    }
-
-    let n = key.n().to_bytes_be();
-    let e = key.e().to_bytes_be();
-
-    let mut buf = vec![0u8; n.len() + e.len() + 32];
-    let mut encoder = der::Encoder::new(&mut buf);
-    encoder
-        .encode(&RsaPublicKey {
-            n: UIntBytes::new(&n).map_err(|e| error!("{}", e))?,
-            e: UIntBytes::new(&e).map_err(|e| error!("{}", e))?,
-        })
-        .map_err(|e| error!("{}", e))?;
-    let b = encoder.finish().map_err(|e| error!("{}", e))?;
-    let encoded_len = b.len();
-
-    buf.truncate(encoded_len);
-    Ok(buf)
-}
-
-fn asn1_encode_sign<'r, T: Encode>(
-    signing_key: &RsaPrivateKey,
-    object: &T,
+fn asn1_encode_sign<'r, T, E>(
+    trussed: &mut T,
+    signing_key: KeyId,
+    object: &E,
     buf: &'r mut [u8],
-) -> Result<(&'r [u8], Vec<u8>), ()> {
+) -> Result<(&'r [u8], Signature), ()>
+where
+    T: trussed::client::CryptoClient,
+    E: Encode,
+{
     let mut encoder = der::Encoder::new(buf);
     encoder.encode(object).map_err(|e| error!("{}", e))?;
     let encoded = encoder.finish().map_err(|e| error!("{}", e))?;
 
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(encoded);
-    let hash = hasher.finalize();
-
-    let signature = signing_key
-        .sign(
-            rsa::PaddingScheme::PKCS1v15Sign {
-                hash: Some(rsa::Hash::SHA2_256),
-            },
-            &hash,
-        )
-        .map_err(|e| error!("Failed to sign ASN.1 object: {}", e))?;
+    let Sign { signature } = trussed::try_syscall!(trussed.sign(
+        Mechanism::Ed255,
+        signing_key,
+        encoded,
+        SignatureSerialization::Raw,
+    ))
+    .map_err(|e| error!("Failed to sign CSR: {:?}", e))?;
 
     Ok((encoded, signature))
 }
 
-pub fn make_csr(
-    key_priv: &RsaPrivateKey,
-    key_pub: &RsaPublicKey,
-    device_id: u64,
-) -> Result<Vec<u8>, ()> {
-    let device_id_str = format!("{:X}", device_id);
+pub fn make_csr<T>(trussed: &mut T, key: KeyId, device_id: u64) -> Result<Vec<u8>, ()>
+where
+    T: trussed::client::CryptoClient,
+{
+    let SerializeKey {
+        serialized_key: key_pub,
+    } = trussed::try_syscall!(trussed.serialize_key(Mechanism::Ed255, key, KeySerialization::Raw))
+        .map_err(|e| error!("Trussed key serialization failed: {:?}", e))?;
 
-    let key_pub_asn1 =
-        rsa_asn1_encode(key_pub).map_err(|()| error!("Failed to ASN.1 encode RSA public key"))?;
+    let device_id_str = format!("{:X}", device_id);
 
     let organization = AttributeTypeAndValue {
         oid: ORGANIZATION_NAME,
@@ -86,8 +63,8 @@ pub fn make_csr(
 
     let mut buf = Vec::new();
     buf.resize(
-        // Buffer must hold modulus + signature (which size equals to modulus size) + exponent
-        key_pub.n().bits() / 8 * 2 + key_pub.e().bits() / 8
+        // Buffer must hold public key (always 32 bytes for ed25519) + signature (always 64 bytes)
+        32 + 64
         // Add some space for other data
         + 128,
         0,
@@ -118,22 +95,22 @@ pub fn make_csr(
         attributes: SetOfVec::new(),
         public_key: SubjectPublicKeyInfo {
             algorithm: AlgorithmIdentifier {
-                // rsaEncryption
-                oid: ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1"),
+                // Ed25519
+                oid: ObjectIdentifier::new_unwrap("1.3.101.112"),
                 parameters: None,
             },
-            subject_public_key: &key_pub_asn1,
+            subject_public_key: &key_pub,
         },
     };
 
-    let (_encoded_info, signature) =
-        asn1_encode_sign(key_priv, &info, &mut buf).map_err(|()| error!("CSR signing failed"))?;
+    let (_encoded_info, signature) = asn1_encode_sign(trussed, key, &info, &mut buf)
+        .map_err(|()| error!("CSR signing failed"))?;
 
     let req = CertReq {
         info,
         algorithm: AlgorithmIdentifier {
-            // sha256WithRSAEncryption
-            oid: ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11"),
+            // Ed25519
+            oid: ObjectIdentifier::new_unwrap("1.3.101.112"),
             parameters: None,
         },
         signature: BitString::from_bytes(&signature).unwrap(),

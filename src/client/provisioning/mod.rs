@@ -564,6 +564,10 @@ impl<'a> FobnailClient<'a> {
                 };
                 trussed::cbor_serialize_bytes::<_, MAX_MESSAGE_LENGTH>(&key).unwrap()
             }
+            crypto::Key::Ed25519(_) => {
+                error!("Platform provisioning with Ed25519 keys is not supported");
+                return Err(());
+            }
         };
 
         let mut locate = trussed::syscall!(trussed.locate_file(

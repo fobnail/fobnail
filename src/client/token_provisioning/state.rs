@@ -1,9 +1,10 @@
 use core::fmt;
 
-use alloc::{boxed::Box, vec::Vec};
-use rsa::{RsaPrivateKey, RsaPublicKey};
+use alloc::vec::Vec;
 
-pub enum State {
+use crate::client::crypto::Ed25519Key;
+
+pub enum State<'a> {
     /// Request platform owner certificate chain.
     RequestPoCertChain {
         request_pending: bool,
@@ -29,13 +30,18 @@ pub enum State {
     /// Platform Owner for certification.
     SendCsr {
         request_pending: bool,
-        keypair: Option<Box<(RsaPrivateKey, RsaPublicKey)>>,
+        key: Option<Ed25519Key<'a>>,
     },
 
     /// Verify resulting certificate
     VerifyCertificate {
-        keypair: Box<(RsaPrivateKey, RsaPublicKey)>,
+        key: Option<Ed25519Key<'a>>,
         certificate: Vec<u8>,
+    },
+
+    DeleteKey {
+        key: Option<Ed25519Key<'a>>,
+        success: bool,
     },
 
     /// Provisioning is complete. Main loop is responsible for switching mode
@@ -43,7 +49,7 @@ pub enum State {
     Done,
 }
 
-impl Default for State {
+impl Default for State<'_> {
     fn default() -> Self {
         Self::RequestPoCertChain {
             request_pending: false,
@@ -51,19 +57,31 @@ impl Default for State {
     }
 }
 
-impl State {
+impl State<'_> {
     /// Signal status and transition into error state.
     pub fn error(&mut self) {
-        *self = Self::SignalStatus { success: false };
+        *self = match self {
+            Self::SendCsr { key, .. } | Self::VerifyCertificate { key, .. } => Self::DeleteKey {
+                key: key.take(),
+                success: false,
+            },
+            _ => Self::SignalStatus { success: false },
+        }
     }
 
     /// Signal status and transition into done state.
     pub fn done(&mut self) {
-        *self = Self::SignalStatus { success: true };
+        *self = match self {
+            Self::SendCsr { key, .. } | Self::VerifyCertificate { key, .. } => Self::DeleteKey {
+                key: key.take(),
+                success: true,
+            },
+            _ => Self::SignalStatus { success: true },
+        }
     }
 }
 
-impl fmt::Display for State {
+impl fmt::Display for State<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RequestPoCertChain { .. } => write!(f, "request po cert chain"),
@@ -72,6 +90,7 @@ impl fmt::Display for State {
             Self::GenerateKeys => write!(f, "generate keys"),
             Self::SendCsr { .. } => write!(f, "send CSR"),
             Self::VerifyCertificate { .. } => write!(f, "verify certificate"),
+            Self::DeleteKey { .. } => write!(f, "delete key"),
             Self::Done => write!(f, "done"),
             Self::Idle { .. } => write!(f, "idle"),
         }

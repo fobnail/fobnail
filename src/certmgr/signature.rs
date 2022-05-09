@@ -11,6 +11,7 @@ pub enum HashAlgorithm {
 
 pub enum SignatureAlgorithm {
     Rsa,
+    Ed25519,
 }
 
 pub struct Signature<'a> {
@@ -28,9 +29,18 @@ impl<'a> Signature<'a> {
         }
     }
 
+    pub fn ed25519(signature: &'a [u8]) -> Self {
+        Self {
+            hash_algo: HashAlgorithm::Sha512,
+            sig_algo: SignatureAlgorithm::Ed25519,
+            signature,
+        }
+    }
+
     pub fn is_compatible(&self, key: &Key) -> bool {
         match self.sig_algo {
             SignatureAlgorithm::Rsa => key.is_rsa(),
+            SignatureAlgorithm::Ed25519 => key.is_ed25519(),
         }
     }
 
@@ -48,6 +58,7 @@ impl fmt::Display for Signature<'_> {
                 HashAlgorithm::Sha384 => write!(f, "sha384WithRSAEncryption"),
                 HashAlgorithm::Sha512 => write!(f, "sha512WithRSAEncryption"),
             },
+            SignatureAlgorithm::Ed25519 => write!(f, "ED25519"),
         }
     }
 }

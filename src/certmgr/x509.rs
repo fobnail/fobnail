@@ -143,6 +143,7 @@ impl<'a> X509Certificate<'a> {
 
     pub fn key(&self) -> Result<Key> {
         const OID_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
+        const OID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
 
         let info = &self.inner.inner.tbs_certificate.subject_public_key_info;
         match info.algorithm.oid {
@@ -169,6 +170,7 @@ impl<'a> X509Certificate<'a> {
                     e: exponent,
                 })
             }
+            OID_ED25519 => Ok(Key::Ed25519(info.subject_public_key)),
             _ => Err(Error::CustomStatic("Unsupported algorithm")),
         }
     }
@@ -182,8 +184,9 @@ impl<'a> X509Certificate<'a> {
             ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.12");
         const OID_SHA512_WITH_RSA: ObjectIdentifier =
             ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.13");
+        const OID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
 
-        let get_rsa_signature = || -> Result<&[u8]> {
+        let get_signature = || -> Result<&[u8]> {
             self.inner
                 .inner
                 .signature
@@ -194,11 +197,12 @@ impl<'a> X509Certificate<'a> {
         match self.inner.inner.signature_algorithm.oid {
             OID_SHA224_WITH_RSA => {
                 // RSA signature size always matches
-                Ok(Signature::rsa(HashAlgorithm::Sha224, get_rsa_signature()?))
+                Ok(Signature::rsa(HashAlgorithm::Sha224, get_signature()?))
             }
-            OID_SHA256_WITH_RSA => Ok(Signature::rsa(HashAlgorithm::Sha256, get_rsa_signature()?)),
-            OID_SHA384_WITH_RSA => Ok(Signature::rsa(HashAlgorithm::Sha384, get_rsa_signature()?)),
-            OID_SHA512_WITH_RSA => Ok(Signature::rsa(HashAlgorithm::Sha512, get_rsa_signature()?)),
+            OID_SHA256_WITH_RSA => Ok(Signature::rsa(HashAlgorithm::Sha256, get_signature()?)),
+            OID_SHA384_WITH_RSA => Ok(Signature::rsa(HashAlgorithm::Sha384, get_signature()?)),
+            OID_SHA512_WITH_RSA => Ok(Signature::rsa(HashAlgorithm::Sha512, get_signature()?)),
+            OID_ED25519 => Ok(Signature::ed25519(get_signature()?)),
             _ => Err(Error::CustomStatic("Unsupported signature type")),
         }
     }
