@@ -1,5 +1,7 @@
 INCLUDE link.x
-STORAGE_SIZE = 65536;
+
+# MUST be kept in sync with PERSISTENT_STORAGE_SIZE constant from store.rs
+STORAGE_SIZE = 131072;
 
 SECTIONS {
     # Storage must be aligned on erase block size (4096), otherwise firmware

@@ -13,10 +13,12 @@ const_ram_storage!(VolatileStorage, 4096);
 // bytes.
 const_ram_storage!(ExternalStorage, 1024);
 
-/// How much storage do we need. For now let's use 64 KiB, may be extended in
-/// future (must be kept in sync with storage size declared in link.x file). Must
-/// be multiple of 4096.
-const PERSISTENT_STORAGE_SIZE: usize = 65536;
+/// How much storage do we need. 64 KiB turned out to be far too little. LittleFS
+/// wastes large amount of space for directory - each empty directory reserves
+/// 2 blocks (4 KiB each), see https://github.com/littlefs-project/littlefs/issues/645
+///
+/// Note: MUST be kept in sync with storage size declared in link.x file
+const PERSISTENT_STORAGE_SIZE: usize = 131072;
 
 extern "C" {
     static __persistent_storage_start: usize;
