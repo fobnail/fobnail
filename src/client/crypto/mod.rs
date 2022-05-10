@@ -1,8 +1,9 @@
 use core::{marker::PhantomData, mem::forget};
 
 use trussed::{
-    api::reply::GenerateKey,
-    types::{KeyId, Location, Mechanism, StorageAttributes},
+    api::reply::{Exists, GenerateKey, ReadFile},
+    config::MAX_MESSAGE_LENGTH,
+    types::{KeyId, Location, Mechanism, PathBuf, StorageAttributes},
 };
 
 pub mod rng;
@@ -33,6 +34,7 @@ impl RsaKey<'_> {
 pub struct Ed25519Key<'a> {
     id: KeyId,
     needs_manual_drop: bool,
+    location: Location,
     phantom: PhantomData<&'a ()>,
 }
 
@@ -52,6 +54,7 @@ impl<'a> Ed25519Key<'a> {
         Ok(Self {
             id,
             needs_manual_drop: location == Location::Volatile,
+            location,
             phantom: PhantomData,
         })
     }
@@ -62,6 +65,47 @@ impl<'a> Ed25519Key<'a> {
     {
         trussed::syscall!(trussed.delete(self.id()));
         forget(self);
+    }
+
+    pub fn load_named<T>(trussed: &mut T, location: Location, name: &str) -> Result<Self, ()>
+    where
+        T: trussed::client::CryptoClient + trussed::client::FilesystemClient,
+    {
+        let id = locate_key(trussed, location, name)
+            .ok_or_else(|| debug!("key \"{}\" not found", name))?;
+
+        let Exists { exists } = trussed::syscall!(trussed.exists(Mechanism::Ed255, id));
+        if !exists {
+            error!(
+                "Name \"{}\" resolved to non-existent key ID {}",
+                name,
+                core::str::from_utf8(&id.hex()).unwrap_or("<invalid>")
+            );
+            return Err(());
+        }
+
+        Ok(Self {
+            id,
+            needs_manual_drop: false,
+            location,
+            phantom: PhantomData,
+        })
+    }
+
+    pub fn assign_name<T>(&self, trussed: &mut T, name: &str) -> Result<(), ()>
+    where
+        T: trussed::client::FilesystemClient,
+    {
+        let key_serialized = trussed::cbor_serialize_bytes::<_, { MAX_MESSAGE_LENGTH }>(&self.id())
+            .map_err(|e| error!("Failed to serialize key ID: {}", e))?;
+
+        let path_str = format!("/key_{}", name);
+        let path = PathBuf::from(path_str.as_bytes());
+
+        trussed::try_syscall!(trussed.write_file(self.location, path, key_serialized, None))
+            .map_err(|_| error!("Could not write {}", path_str))?;
+
+        Ok(())
     }
 
     #[must_use]
@@ -99,4 +143,18 @@ impl<'a> From<Ed25519Key<'a>> for Key<'a> {
     fn from(key: Ed25519Key<'a>) -> Self {
         Self::Ed25519(key)
     }
+}
+
+/// Converts named key into KeyId. Trussed currently doesn't support
+/// named/labelled keys so we have to implement this on our own.
+fn locate_key<T>(trussed: &mut T, location: Location, name: &str) -> Option<KeyId>
+where
+    T: trussed::client::FilesystemClient,
+{
+    let path = PathBuf::from(format!("/key_{}", name).as_bytes());
+    let ReadFile { data } = trussed::try_syscall!(trussed.read_file(location, path)).ok()?;
+
+    trussed::cbor_deserialize(&data)
+        .map_err(|e| error!("Invalid serialized key ID: {}", e))
+        .ok()
 }

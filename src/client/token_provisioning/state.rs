@@ -39,11 +39,6 @@ pub enum State<'a> {
         certificate: Vec<u8>,
     },
 
-    DeleteKey {
-        key: Option<Ed25519Key<'a>>,
-        success: bool,
-    },
-
     /// Provisioning is complete. Main loop is responsible for switching mode
     /// into platform provisioning mode.
     Done,
@@ -60,24 +55,12 @@ impl Default for State<'_> {
 impl State<'_> {
     /// Signal status and transition into error state.
     pub fn error(&mut self) {
-        *self = match self {
-            Self::SendCsr { key, .. } | Self::VerifyCertificate { key, .. } => Self::DeleteKey {
-                key: key.take(),
-                success: false,
-            },
-            _ => Self::SignalStatus { success: false },
-        }
+        *self = Self::SignalStatus { success: false }
     }
 
     /// Signal status and transition into done state.
     pub fn done(&mut self) {
-        *self = match self {
-            Self::SendCsr { key, .. } | Self::VerifyCertificate { key, .. } => Self::DeleteKey {
-                key: key.take(),
-                success: true,
-            },
-            _ => Self::SignalStatus { success: true },
-        }
+        *self = Self::SignalStatus { success: true }
     }
 }
 
@@ -90,7 +73,6 @@ impl fmt::Display for State<'_> {
             Self::GenerateKeys => write!(f, "generate keys"),
             Self::SendCsr { .. } => write!(f, "send CSR"),
             Self::VerifyCertificate { .. } => write!(f, "verify certificate"),
-            Self::DeleteKey { .. } => write!(f, "delete key"),
             Self::Done => write!(f, "done"),
             Self::Idle { .. } => write!(f, "idle"),
         }

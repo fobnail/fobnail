@@ -144,7 +144,34 @@ impl<'a> FobnailClient<'a> {
             }
             State::GenerateKeys => {
                 let mut trussed = self.trussed.borrow_mut();
-                let key = Ed25519Key::generate(*trussed, Location::Volatile).unwrap();
+
+                let key = match Ed25519Key::load_named(*trussed, Location::Internal, "token") {
+                    Ok(key) => key,
+                    Err(()) => {
+                        info!("Generating new Ed25519 keypair");
+                        match Ed25519Key::generate(*trussed, Location::Internal) {
+                            // Trussed does not have APIs to turn once volatile key
+                            // into persistent one, i.e. we cannot change key location.
+                            // To workaround this problem we generate key only once
+                            // (device reset wipes out the key) and load the same key
+                            // on subsequent provisioning attempts.
+                            Ok(key) => match key.assign_name(*trussed, "token") {
+                                Ok(()) => key,
+                                Err(()) => {
+                                    error!("Could not assign name to generated key");
+                                    key.delete(*trussed);
+                                    state.error();
+                                    return;
+                                }
+                            },
+                            Err(()) => {
+                                error!("Failed to generate Ed25519 keypair");
+                                state.error();
+                                return;
+                            }
+                        }
+                    }
+                };
 
                 *state = State::SendCsr {
                     request_pending: false,
@@ -180,14 +207,6 @@ impl<'a> FobnailClient<'a> {
                     Err(()) => state.error(),
                 }
             }
-            State::DeleteKey { key, success } => {
-                let mut trussed = self.trussed.borrow_mut();
-                if let Some(key) = key.take() {
-                    key.delete(*trussed);
-                }
-
-                *state = State::SignalStatus { success: *success }
-            }
         }
     }
 
@@ -212,8 +231,7 @@ impl<'a> FobnailClient<'a> {
             | State::SignalStatus { .. }
             | State::VerifyPoCertChain { .. }
             | State::GenerateKeys
-            | State::VerifyCertificate { .. }
-            | State::DeleteKey { .. } => {
+            | State::VerifyCertificate { .. } => {
                 // We don't send any requests during these states so we shouldn't
                 // get responses.
                 unreachable!(
