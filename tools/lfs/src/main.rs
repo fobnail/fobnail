@@ -30,6 +30,7 @@ struct Options {
 
 #[derive(Parser)]
 enum Command {
+    Version,
     Dir {
         path: PathBuf,
     },
@@ -90,6 +91,13 @@ fn main() -> anyhow::Result<()> {
     let fs = Filesystem::mount(&mut alloc, &mut flash).unwrap();
 
     match options.command {
+        Command::Version => {
+            let version = littlefs2::version();
+            println!(
+                "LittleFS version: format={}.{} backend={}.{}",
+                version.format.0, version.format.1, version.backend.0, version.backend.1
+            );
+        }
         Command::Dir { path } => {
             list_directory(&fs, &path)?;
         }
