@@ -11,6 +11,7 @@ pretty_env_logger = "0.4"
 smoltcp = { version = "0.7.5", default-features = false, features = ["phy-tap_interface"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 chacha20 = { version = "0.8", features = ["rng"] }
-littlefs2 = "0.3"
+# Use the same version as Trussed, must be kept in sync
+littlefs2 = { git = "https://github.com/fobnail/littlefs2", branch = "upstream-v2.4.2-fs-corruption-fix" }
 # Must be kept in with pal_nrf and pal_pc
 trussed = { path = "../../external/trussed" }
