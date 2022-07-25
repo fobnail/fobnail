@@ -51,7 +51,7 @@ repos:
           #   args: ['--manifest-path', 'pal/pal_pc/Cargo.toml', '--', '-D', 'warnings']
 
   - repo: https://github.com/crate-ci/typos
-    rev: v1.10.2
+    rev: typos-dict-v0.8.4
     hooks:
       - id: typos
 
