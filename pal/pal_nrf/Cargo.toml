@@ -29,6 +29,10 @@ chacha20 = { version = "0.8", features = ["rng"] }
 # Use the same version as Trussed, must be kept in sync
 littlefs2 = { git = "https://github.com/fobnail/littlefs2", branch = "upstream-v2.4.2-fs-corruption-fix" }
 embedded-storage = "0.3"
+embassy = { path = "../../external/embassy/embassy", features = ["nightly", "time"] }
+embassy-nrf = { path = "../../external/embassy/embassy-nrf", features = ["nrf52840", "time-driver-rtc1"] }
+embassy-net = { path = "../../external/embassy/embassy-net", features = ["udp", "medium-ethernet", "pool-32"] }
+pal_macros = { path = "../pal_macros", features=["nrf52840"] }
 
 # void type, this is a relict of the past from the time when Rust didn't have
 # ! type, nRF hal still uses this
