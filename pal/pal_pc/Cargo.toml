@@ -15,3 +15,5 @@ chacha20 = { version = "0.8", features = ["rng"] }
 littlefs2 = { git = "https://github.com/fobnail/littlefs2", branch = "upstream-v2.4.2-fs-corruption-fix" }
 # Must be kept in with pal_nrf and pal_pc
 trussed = { path = "../../external/trussed" }
+embassy = { path = "../../external/embassy/embassy", features = ["nightly", "std"] }
+pal_macros = { path = "../pal_macros", features = ["pc"] }

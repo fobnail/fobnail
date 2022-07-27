@@ -7,3 +7,6 @@
 [submodule "external/formats"]
 	path = external/formats
 	url = https://github.com/RustCrypto/formats
+[submodule "external/embassy"]
+	path = external/embassy
+	url = https://github.com/embassy-rs/embassy

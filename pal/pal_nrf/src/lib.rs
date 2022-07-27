@@ -27,6 +27,9 @@ use hal::Clocks;
 use hal::Timer;
 
 pub use device_id::*;
+pub use embassy;
+pub use embassy_nrf;
+pub use pal_macros::*;
 
 pub mod button;
 mod device_id;
@@ -34,6 +37,7 @@ pub mod ethernet;
 mod heap;
 pub mod led;
 mod logger;
+pub mod net;
 mod panic;
 pub mod timer;
 pub mod trussed;
@@ -124,6 +128,7 @@ pub fn init() {
     trussed::storage_init(nvmc);
 
     usb::init(periph.USBD);
+    net::init();
 
     unsafe {
         NVIC::unmask(Interrupt::TIMER0);
