@@ -15,6 +15,7 @@ pub extern crate cortex_m_rt;
 use core::mem::MaybeUninit;
 
 use cortex_m::interrupt::free;
+use embassy::executor::Spawner;
 use hal::clocks::{ExternalOscillator, Internal, LfOscStopped};
 use hal::gpio::{self, Level};
 use hal::pac::{
@@ -66,7 +67,7 @@ fn TIMER0() {
     })
 }
 
-pub fn init() {
+pub fn init(_spawner: Spawner) {
     rtt_target::rtt_init_print!();
     logger::init();
     heap::init();

@@ -11,12 +11,14 @@ pub use device_id::*;
 pub use embassy;
 pub use pal_macros::*;
 
+use embassy::executor::Spawner;
+
 /// Reduces CPU load by yielding.
 pub fn cpu_relax() {
     yield_now()
 }
 
-pub fn init() {
+pub fn init(_spawner: Spawner) {
     pretty_env_logger::init_custom_env("FOBNAIL_LOG");
     timer::init();
     device_id::init();

@@ -45,27 +45,29 @@ pub fn main(_attr: TokenStream, input: TokenStream) -> proc_macro::TokenStream {
         #f
 
         #[doc(hidden)]
-        async fn #wrapper() {
-            let fut = #real_main();
-            fut.await;
-            panic!("main returned");
+        fn #wrapper(spawner: #executor_path::Spawner) -> #executor_path::SpawnToken<impl Sized> {
+            use #embassy_path::executor::raw::TaskPool;
+
+            #init_path(spawner);
+
+            type Fut = impl ::core::future::Future + 'static;
+            static POOL: TaskPool<Fut, 1usize> = TaskPool::new();
+            POOL.spawn(move || {
+                async move {
+                    #real_main().await;
+                    panic!("main returned");
+                }
+            })
         }
 
         #[no_mangle]
         fn main() {
             use #executor_path::Executor;
-            use #embassy_path::executor::raw::TaskPool;
             use #embassy_path::util::Forever;
 
-            #init_path();
-
             static EXECUTOR: Forever<Executor> = Forever::new();
-            type Fut = impl ::core::future::Future + 'static;
-            static POOL: TaskPool<Fut, 1usize> = TaskPool::new();
-            let token = POOL.spawn(move || #wrapper());
-
             let executor = EXECUTOR.put(Executor::new());
-            executor.run(|spawner| spawner.must_spawn(token));
+            executor.run(|spawner| spawner.must_spawn(#wrapper(spawner)));
         }
     }
     .into()
