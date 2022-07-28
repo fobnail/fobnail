@@ -1,5 +1,6 @@
 #![no_std]
 #![feature(alloc_error_handler)]
+#![feature(type_alias_impl_trait)]
 
 extern crate nrf52840_hal as hal;
 
@@ -12,29 +13,25 @@ extern crate rtt_target;
 extern crate alloc;
 pub extern crate cortex_m_rt;
 
-use core::mem::MaybeUninit;
-
-use cortex_m::interrupt::free;
 use embassy::executor::Spawner;
 use hal::clocks::{ExternalOscillator, Internal, LfOscStopped};
 use hal::gpio::{self, Level};
 use hal::pac::{
-    interrupt,
     nvmc::icachecnf::{CACHEEN_A, CACHEPROFEN_A},
-    Interrupt, NVIC, TIMER0,
+    Interrupt, NVIC,
 };
-use hal::timer::{Instance, Periodic};
+
 use hal::Clocks;
 use hal::Timer;
 
 pub use device_id::*;
 pub use embassy;
+pub use embassy_net;
 pub use embassy_nrf;
 pub use pal_macros::*;
 
 pub mod button;
 mod device_id;
-pub mod ethernet;
 mod heap;
 pub mod led;
 mod logger;
@@ -50,24 +47,9 @@ pub fn hfosc() -> &'static Clocks<ExternalOscillator, Internal, LfOscStopped> {
     unsafe { HFOSC.as_ref().unwrap() }
 }
 
-const TIMER0_PERIOD_MS: u32 = 1;
+pub fn init(spawner: Spawner) {
+    embassy_nrf::init(Default::default());
 
-static mut TIMER0: MaybeUninit<TIMER0> = MaybeUninit::uninit();
-#[interrupt]
-#[allow(non_snake_case)]
-fn TIMER0() {
-    free(|cs| {
-        usb::usb_interrupt(cs);
-
-        // SAFETY: TIMER0 global must be properly initialized before interrupts
-        // are enabled
-        let timer0 = unsafe { TIMER0.assume_init_ref() };
-        // Clear interrupt flag
-        timer0.as_timer0().events_compare[0].reset();
-    })
-}
-
-pub fn init(_spawner: Spawner) {
     rtt_target::rtt_init_print!();
     logger::init();
     heap::init();
@@ -96,17 +78,6 @@ pub fn init(_spawner: Spawner) {
     let port0 = gpio::p0::Parts::new(periph.P0);
     let port1 = gpio::p1::Parts::new(periph.P1);
 
-    // Initialize timers
-    // set TIMER0 to poll USB every TIMER0_PERIOD_MS
-    let timer0 = periph.TIMER0;
-    unsafe {
-        TIMER0 = MaybeUninit::new(timer0);
-        let timer0 = TIMER0.assume_init_ref();
-        timer0.set_periodic();
-        timer0.enable_interrupt();
-        timer0.timer_start(Timer::<TIMER0, Periodic>::TICKS_PER_SECOND / 1000 * TIMER0_PERIOD_MS);
-    }
-
     // initialize LEDs
     led::init(
         port0.p0_06.into_push_pull_output(Level::High),
@@ -128,8 +99,8 @@ pub fn init(_spawner: Spawner) {
     // be safe.
     trussed::storage_init(nvmc);
 
-    usb::init(periph.USBD);
-    net::init();
+    usb::init(spawner, periph.USBD);
+    net::init(spawner);
 
     unsafe {
         NVIC::unmask(Interrupt::TIMER0);
