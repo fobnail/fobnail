@@ -8,12 +8,14 @@ edition = "2021"
 [dependencies]
 log = "0.4"
 pretty_env_logger = "0.4"
-smoltcp = { version = "0.7.5", default-features = false, features = ["phy-tap_interface"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 chacha20 = { version = "0.8", features = ["rng"] }
 # Use the same version as Trussed, must be kept in sync
 littlefs2 = { git = "https://github.com/fobnail/littlefs2", branch = "upstream-v2.4.2-fs-corruption-fix" }
 # Must be kept in with pal_nrf and pal_pc
 trussed = { path = "../../external/trussed" }
+libc = "0.2"
+async-io = "1"
 embassy = { path = "../../external/embassy/embassy", features = ["nightly", "std"] }
+embassy-net = { path = "../../external/embassy/embassy-net", features = ["udp", "tcp", "medium-ethernet", "pool-32"] }
 pal_macros = { path = "../pal_macros", features = ["pc"] }
