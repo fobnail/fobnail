@@ -50,6 +50,12 @@ async fn main() {
                 }
             };
 
+            if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                info!("ECHO: {}", s);
+            } else {
+                info!("ECHO: bytearray len {}", n);
+            }
+
             if let Err(e) = socket.write_all(&buf[..n]).await {
                 warn!("echo failed: {:?}", e);
             } else {
