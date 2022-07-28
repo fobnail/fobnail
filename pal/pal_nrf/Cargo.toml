@@ -19,7 +19,6 @@ usb-device = "0.2.8"
 # instead of git
 usbd-ethernet = { git = "https://github.com/fobnail/usbd-ethernet", features = ["smoltcp_integration", "logging"] }
 
-smoltcp = { version = "0.7.5", default-features = false, features = ["proto-ipv4", "socket-udp", "ethernet", "log"] }
 log = { version = "0.4", default-features = false }
 
 linked_list_allocator = { version = "0.9.1", default-features = false, features = ["const_mut_refs"] }
@@ -31,12 +30,19 @@ littlefs2 = { git = "https://github.com/fobnail/littlefs2", branch = "upstream-v
 embedded-storage = "0.3"
 embassy = { path = "../../external/embassy/embassy", features = ["nightly", "time"] }
 embassy-nrf = { path = "../../external/embassy/embassy-nrf", features = ["nrf52840", "time-driver-rtc1"] }
-embassy-net = { path = "../../external/embassy/embassy-net", features = ["udp", "medium-ethernet", "pool-32"] }
+embassy-net = { path = "../../external/embassy/embassy-net", features = ["udp", "tcp", "medium-ethernet", "pool-32"] }
+futures-util = { version = "0.3", default-features = false }
 pal_macros = { path = "../pal_macros", features=["nrf52840"] }
 
 # void type, this is a relict of the past from the time when Rust didn't have
 # ! type, nRF hal still uses this
 void = { version = "1", default-features = false }
+
+[dependencies.smoltcp]
+git = "https://github.com/smoltcp-rs/smoltcp"
+rev = "ed0cf16750a42f30e31fcaf5347915592924b1e3"
+features = ["proto-ipv4"]
+default-features = false
 
 # Must be kept in sync with pal_nrf and pal_pc
 [dependencies.trussed]
