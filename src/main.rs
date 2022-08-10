@@ -11,56 +11,35 @@ extern crate pal_pc as pal;
 #[macro_use]
 extern crate log;
 
-use embedded_io::asynch::{Read, Write};
-use pal::embassy_net::tcp::TcpSocket;
+use pal::embassy_net::{udp::UdpSocket, PacketMetadata};
 
 #[pal::main]
 async fn main() {
     info!("Hello from main");
 
     let stack = pal::net::stack();
+    let mut rx_meta = [PacketMetadata::EMPTY; 16];
     let mut rx_buffer = [0; 4096];
+    let mut tx_meta = [PacketMetadata::EMPTY; 16];
     let mut tx_buffer = [0; 4096];
     let mut buf = [0; 4096];
 
+    let mut socket = UdpSocket::new(
+        stack,
+        &mut rx_meta,
+        &mut rx_buffer,
+        &mut tx_meta,
+        &mut tx_buffer,
+    );
+    socket.bind(9400).unwrap();
+
     loop {
-        info!("waiting for connection");
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        if let Err(e) = socket.accept(1224).await {
-            warn!("accept failed: {:?}", e);
-            continue;
-        }
-
-        if let Some(remote) = socket.remote_endpoint() {
-            info!("Received connection from {}:{}", remote.addr, remote.port);
+        let (n, ep) = socket.recv_from(&mut buf).await.unwrap();
+        if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+            info!("ECHO (to {}): {}", ep, s);
         } else {
-            info!("Received connection from <unknown>");
+            info!("ECHO (to {}): bytearray len {}", ep, n);
         }
-
-        loop {
-            let n = match socket.read(&mut buf).await {
-                Ok(0) => {
-                    warn!("read EOF");
-                    break;
-                }
-                Ok(n) => n,
-                Err(e) => {
-                    warn!("read error: {:?}", e);
-                    break;
-                }
-            };
-
-            if let Ok(s) = core::str::from_utf8(&buf[..n]) {
-                info!("ECHO: {}", s);
-            } else {
-                info!("ECHO: bytearray len {}", n);
-            }
-
-            if let Err(e) = socket.write_all(&buf[..n]).await {
-                warn!("echo failed: {:?}", e);
-            } else {
-                info!("echo done");
-            }
-        }
+        socket.send_to(&buf[..n], ep).await.unwrap();
     }
 }

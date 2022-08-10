@@ -1,11 +1,11 @@
 use super::hfosc;
-use embassy::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy::channel::mpmc::Channel;
-use embassy::channel::signal::Signal;
 use embassy::executor::Spawner;
 use embassy::time::{Duration, Ticker};
-use embassy::util::{select, Either};
 use embassy_net::{Packet, PacketBox, PacketBoxExt, PacketBuf};
+use embassy_util::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_util::channel::mpmc::Channel;
+use embassy_util::channel::signal::Signal;
+use embassy_util::{select, Either};
 use futures_util::StreamExt;
 use hal::pac::USBD;
 use hal::usbd::{UsbPeripheral, Usbd};

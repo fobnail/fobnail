@@ -36,6 +36,7 @@ pub fn main(_attr: TokenStream, input: TokenStream) -> proc_macro::TokenStream {
 
     let init_path = make_path(true, &["pal", "init"]);
     let embassy_path = make_path(true, &["pal", "embassy"]);
+    let embassy_util_path = make_path(true, &["pal", "embassy_util"]);
     let executor_path = make_path(true, EMBASSY_EXECUTOR_PATH);
 
     let real_main = &f.sig.ident;
@@ -63,7 +64,7 @@ pub fn main(_attr: TokenStream, input: TokenStream) -> proc_macro::TokenStream {
         #[no_mangle]
         fn main() {
             use #executor_path::Executor;
-            use #embassy_path::util::Forever;
+            use #embassy_util_path::Forever;
 
             static EXECUTOR: Forever<Executor> = Forever::new();
             let executor = EXECUTOR.put(Executor::new());
