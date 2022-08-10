@@ -10,11 +10,13 @@ pub mod timer;
 pub mod trussed;
 
 pub use device_id::*;
-pub use embassy;
 pub use embassy_net;
+pub use embassy_util;
 pub use pal_macros::*;
 
 use embassy::executor::Spawner;
+
+pub extern crate embassy_executor as embassy;
 
 /// Reduces CPU load by yielding.
 pub fn cpu_relax() {

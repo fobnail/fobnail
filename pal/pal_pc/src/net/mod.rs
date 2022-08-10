@@ -5,11 +5,12 @@ use std::{
 };
 
 use async_io::Async;
-use embassy::{executor::Spawner, util::Forever};
+use embassy::executor::Spawner;
 use embassy_net::{
     Config, ConfigStrategy, Device, DeviceCapabilities, Ipv4Address, Ipv4Cidr, Packet, PacketBox,
     PacketBoxExt, PacketBuf, Stack, StackResources,
 };
+use embassy_util::Forever;
 
 use self::tuntap::TunTap;
 

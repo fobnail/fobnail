@@ -4,10 +4,11 @@ use core::{
     task::{Context, Waker},
 };
 
-use embassy::{executor::Spawner, util::Forever};
+use embassy::executor::Spawner;
 use embassy_net::{
     Config, ConfigStrategy, Device, Ipv4Address, Ipv4Cidr, PacketBuf, Stack, StackResources,
 };
+use embassy_util::Forever;
 use futures_util::Future;
 use smoltcp::phy::{Checksum, ChecksumCapabilities};
 

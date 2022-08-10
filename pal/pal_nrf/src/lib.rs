@@ -25,10 +25,12 @@ use hal::Clocks;
 use hal::Timer;
 
 pub use device_id::*;
-pub use embassy;
 pub use embassy_net;
 pub use embassy_nrf;
+pub use embassy_util;
 pub use pal_macros::*;
+
+pub extern crate embassy_executor as embassy;
 
 pub mod button;
 mod device_id;

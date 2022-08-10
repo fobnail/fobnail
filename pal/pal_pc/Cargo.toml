@@ -16,6 +16,7 @@ littlefs2 = { git = "https://github.com/fobnail/littlefs2", branch = "upstream-v
 trussed = { path = "../../external/trussed" }
 libc = "0.2"
 async-io = "1"
-embassy = { path = "../../external/embassy/embassy", features = ["nightly", "std"] }
+embassy-util = { path = "../../external/embassy/embassy-util", features = [] }
+embassy-executor = { path = "../../external/embassy/embassy-executor", features = ["nightly", "std"] }
 embassy-net = { path = "../../external/embassy/embassy-net", features = ["udp", "tcp", "medium-ethernet", "pool-32"] }
 pal_macros = { path = "../pal_macros", features = ["pc"] }
