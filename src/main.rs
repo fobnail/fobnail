@@ -26,7 +26,7 @@ async fn main() {
     loop {
         info!("waiting for connection");
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        if let Err(e) = socket.accept(1234).await {
+        if let Err(e) = socket.accept(1224).await {
             warn!("accept failed: {:?}", e);
             continue;
         }
