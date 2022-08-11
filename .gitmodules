@@ -10,3 +10,12 @@
 [submodule "external/embassy"]
 	path = external/embassy
 	url = https://github.com/embassy-rs/embassy
+[submodule "external/coap-server-rs"]
+	path = external/coap-server-rs
+	url = https://github.com/jasta/coap-server-rs
+[submodule "external/coap-lite"]
+	path = external/coap-lite
+	url = https://github.com/martindisch/coap-lite
+[submodule "external/lru_time_cache"]
+	path = external/lru_time_cache
+	url = https://github.com/maidsafe/lru_time_cache

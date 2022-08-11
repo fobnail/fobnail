@@ -13,7 +13,7 @@ pal_pc = { path = "pal/pal_pc" }
 
 [dependencies]
 log = { version = "0.4", default-features = false, features = ["max_level_trace"] }
-coap-lite = { version = "0.7", default-features = false }
+coap-lite = { path = "external/coap-lite", default-features = false }
 # Must be kept in sync with pal_nrf and pal_pc
 trussed = { path = "external/trussed" }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
@@ -40,6 +40,12 @@ cfb-mode = { version = "0.8", default-features = false }
 aes = "0.8"
 
 embedded-io = "0.3"
+
+coap-server = { path = "external/coap-server-rs", default-features = false, features = ["embassy"] }
+async-trait = "0.1"
+pin-project = "1"
+futures-util = { version = "0.3", default-features = false }
+futures-lite = { version = "1", default-features = false }
 
 [build-dependencies]
 pem-rfc7468 = { path = "external/formats/pem-rfc7468", features = ["std"] }
