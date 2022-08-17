@@ -55,6 +55,10 @@ struct X509CertInner<'a> {
     owned: Option<*mut [u8]>,
 }
 
+// TODO: verify safety
+unsafe impl Send for X509CertInner<'_> {}
+unsafe impl Sync for X509CertInner<'_> {}
+
 impl Drop for X509CertInner<'_> {
     fn drop(&mut self) {
         unsafe {
