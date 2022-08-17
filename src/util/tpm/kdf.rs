@@ -66,7 +66,7 @@ pub fn kdf_a(
 
 #[cfg(test)]
 mod tests {
-    use crate::client::tpm::mu;
+    use crate::util::tpm::mu;
 
     #[test]
     pub fn test_kdf() {

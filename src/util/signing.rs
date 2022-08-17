@@ -1,6 +1,6 @@
 use core::any::type_name;
 
-use super::{crypto, proto::SignedObject};
+use crate::{server::proto::SignedObject, util::crypto};
 use rsa::PublicKey as _;
 use serde::Deserialize;
 use trussed::types::Mechanism;

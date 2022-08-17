@@ -422,7 +422,7 @@ impl<'a> Rim<'a> {
 pub struct QuoteRequest<'a> {
     #[serde(flatten)]
     pub nonce: Nonce<'a>,
-    pub banks: &'a [super::policy::Bank],
+    pub banks: &'a [crate::util::policy::Bank],
 }
 
 #[derive(Deserialize)]

@@ -21,11 +21,13 @@ extern crate async_trait;
 #[macro_use]
 extern crate pin_project;
 
+extern crate x509_cert as x509;
+
 use alloc::collections::BTreeMap;
 use pal::embassy::time::{Duration, Instant, Ticker};
 use pal::embassy_net::{udp::UdpSocket, PacketMetadata};
 
-use coap_server::app::{CoapError, Request, Response};
+use coap_server::app::Request;
 use coap_server::{app, CoapServer};
 use futures_util::StreamExt;
 use pal::embassy_util::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -34,21 +36,25 @@ use pal::embassy_util::{select, Either, Forever};
 use trussed::ClientImplementation;
 use udp::Endpoint;
 
-mod rng;
+mod certmgr;
+mod server;
 mod udp;
+mod util;
 
 /// How often to check for old clients to disconnect.
 const CLIENT_PURGE_INTERVAL: Duration = Duration::from_secs(1);
 /// Inactivity period after which client gets disconnected.
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 
+type TrussedClient = ClientImplementation<pal::trussed::Syscall>;
+
 struct Client {
     last_activity: Instant,
 }
 
-#[derive(Default)]
-struct ServerState {
-    clients: BTreeMap<Endpoint, Client>,
+pub struct ServerState {
+    trussed: &'static Mutex<CriticalSectionRawMutex, TrussedClient>,
+    clients: Mutex<CriticalSectionRawMutex, BTreeMap<Endpoint, Client>>,
 }
 
 #[pal::main]
@@ -56,8 +62,8 @@ async fn main() {
     info!("Hello from main");
     let mut clients = pal::trussed::init(&["fobnail"]);
 
-    static TRUSSED: Forever<ClientImplementation<pal::trussed::Syscall>> = Forever::new();
-    let trussed = TRUSSED.put(clients.pop().unwrap());
+    static TRUSSED: Forever<Mutex<CriticalSectionRawMutex, TrussedClient>> = Forever::new();
+    let trussed = TRUSSED.put(Mutex::new(clients.pop().unwrap()));
 
     let stack = pal::net::stack();
 
@@ -77,8 +83,12 @@ async fn main() {
     .await
     .unwrap();
 
-    static STATE: Forever<Mutex<CriticalSectionRawMutex, ServerState>> = Forever::new();
-    let state = STATE.put(Mutex::new(ServerState::default()));
+    static STATE: Forever<ServerState> = Forever::new();
+    let state = STATE.put(ServerState {
+        trussed,
+        // TODO: Default could be implemented for embassy Mutex
+        clients: Mutex::new(Default::default()),
+    });
 
     macro_rules! handle {
         ($handler:expr) => {
@@ -96,10 +106,14 @@ async fn main() {
             .not_discoverable()
             .block_transfer()
             .resources(vec![
-                app::resource("/admin/token_provision").post(handle!(token_provision_certchain)),
-                app::resource("/admin/provision_complete").post(token_provision_complete),
+                app::resource("/admin/token_provision").post(handle!(
+                    server::token_provisioning::token_provision_certchain
+                )),
+                app::resource("/admin/provision_complete").post(handle!(
+                    server::token_provisioning::token_provision_complete
+                )),
             ]),
-        rng::TrussedRng::new(trussed),
+        util::rng::TrussedRng::new(trussed),
     );
     futures_util::pin_mut!(server);
     loop {
@@ -117,9 +131,9 @@ async fn main() {
 }
 
 // TODO: actually, this could be easily spawned onto executor
-async fn remove_clients(state: &Mutex<CriticalSectionRawMutex, ServerState>) {
-    let mut state = state.lock().await;
-    state.clients.drain_filter(|k, v| {
+async fn remove_clients(state: &ServerState) {
+    let mut clients = state.clients.lock().await;
+    clients.drain_filter(|k, v| {
         if Instant::now().duration_since(v.last_activity) > CLIENT_TIMEOUT {
             info!("disconnect client: {:?}", k);
             true
@@ -129,39 +143,17 @@ async fn remove_clients(state: &Mutex<CriticalSectionRawMutex, ServerState>) {
     });
 }
 
-async fn handle_client(ep: Endpoint, state: &Mutex<CriticalSectionRawMutex, ServerState>) {
-    let mut state = state.lock().await;
-    if let Some(client) = state.clients.get_mut(&ep) {
+async fn handle_client(ep: Endpoint, state: &ServerState) {
+    let mut clients = state.clients.lock().await;
+    if let Some(client) = clients.get_mut(&ep) {
         client.last_activity = Instant::now();
     } else {
         info!("new client: {:?}", ep);
-        state.clients.insert(
+        clients.insert(
             ep,
             Client {
                 last_activity: Instant::now(),
             },
         );
     }
-}
-
-async fn token_provision_certchain(
-    request: Request<Endpoint>,
-    _state: &Mutex<CriticalSectionRawMutex, ServerState>,
-) -> Result<Response, CoapError> {
-    info!(
-        "provision start, payload len={}",
-        request.original.message.payload.len()
-    );
-    debug!("unmatched: {:#?}", request.unmatched_path);
-
-    let mut response = request.new_response();
-    response.message.set_option(
-        coap_lite::CoapOption::LocationPath,
-        [b"74958".to_vec()].into(),
-    );
-    Ok(response)
-}
-
-async fn token_provision_complete(_request: Request<Endpoint>) -> Result<Response, CoapError> {
-    todo!()
 }
