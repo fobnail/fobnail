@@ -23,7 +23,10 @@ extern crate pin_project;
 
 extern crate x509_cert as x509;
 
+use core::sync::atomic::AtomicBool;
+
 use alloc::collections::BTreeMap;
+use certmgr::CertMgr;
 use pal::embassy::time::{Duration, Instant, Ticker};
 use pal::embassy_net::{udp::UdpSocket, PacketMetadata};
 
@@ -35,6 +38,7 @@ use pal::embassy_util::mutex::Mutex;
 use pal::embassy_util::{select, Either, Forever};
 use trussed::ClientImplementation;
 use udp::Endpoint;
+use util::provisioning::is_token_provisioned;
 
 mod certmgr;
 mod server;
@@ -53,8 +57,12 @@ struct Client {
 }
 
 pub struct ServerState {
+    // FIXME: should avoid using CriticalSectionRawMutex as it disables USB
+    // interrupts. ThreadModeRawMutex may be a possible alternative.
     trussed: &'static Mutex<CriticalSectionRawMutex, TrussedClient>,
     clients: Mutex<CriticalSectionRawMutex, BTreeMap<Endpoint, Client>>,
+    certmgr: Mutex<CriticalSectionRawMutex, CertMgr>,
+    token_provisioned: AtomicBool,
 }
 
 #[pal::main]
@@ -83,11 +91,15 @@ async fn main() {
     .await
     .unwrap();
 
+    let token_provisioned = is_token_provisioned(&mut *trussed.lock().await).into();
+
     static STATE: Forever<ServerState> = Forever::new();
     let state = STATE.put(ServerState {
         trussed,
         // TODO: Default could be implemented for embassy Mutex
         clients: Mutex::new(Default::default()),
+        certmgr: Mutex::new(CertMgr::new()),
+        token_provisioned,
     });
 
     macro_rules! handle {
@@ -106,10 +118,10 @@ async fn main() {
             .not_discoverable()
             .block_transfer()
             .resources(vec![
-                app::resource("/admin/token_provision").post(handle!(
+                app::resource("/api/v1/admin/token_provision").post(handle!(
                     server::token_provisioning::token_provision_certchain
                 )),
-                app::resource("/admin/provision_complete").post(handle!(
+                app::resource("/api/v1/admin/provision_complete").post(handle!(
                     server::token_provisioning::token_provision_complete
                 )),
             ]),
