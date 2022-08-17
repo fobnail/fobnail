@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
-pub use crate::client::policy::Bank;
-use crate::client::proto::PcrAlgo;
+use crate::server::proto::PcrAlgo;
+pub use crate::util::policy::Bank;
 
 macro_rules! decode {
     ($cursor:expr, $data:expr, [u8]) => {{

@@ -177,7 +177,7 @@ mod tests {
     use rand_core::RngCore;
 
     use super::{make_credential_rsa_internal, mu};
-    use crate::client::crypto::RsaKey;
+    use crate::util::crypto::RsaKey;
 
     #[test]
     fn test_credential_activation() {

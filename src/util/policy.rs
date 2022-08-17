@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::proto::PcrAlgo;
+use crate::server::proto::PcrAlgo;
 
 #[derive(Serialize, Copy, Clone)]
 pub struct Bank {

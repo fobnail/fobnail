@@ -1,6 +1,6 @@
 use crate::{
     certmgr::{CertMgr, VerifyMode, X509Certificate},
-    client::proto,
+    server::proto,
 };
 
 /// Verifies whether entire EK chain is rooted in a trusted certificate and
