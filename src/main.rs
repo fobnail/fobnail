@@ -26,6 +26,7 @@ extern crate x509_cert as x509;
 use core::sync::atomic::AtomicBool;
 
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use certmgr::CertMgr;
 use pal::embassy::time::{Duration, Instant, Ticker};
 use pal::embassy_net::{udp::UdpSocket, PacketMetadata};
@@ -39,6 +40,7 @@ use pal::embassy_util::{select, Either, Forever};
 use trussed::ClientImplementation;
 use udp::Endpoint;
 use util::provisioning::is_token_provisioned;
+use util::signing::Nonce;
 
 mod certmgr;
 mod server;
@@ -52,15 +54,18 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 
 type TrussedClient = ClientImplementation<pal::trussed::Syscall>;
 
-struct Client {
-    last_activity: Instant,
+pub struct Client {
+    nonce: Option<Nonce>,
 }
 
 pub struct ServerState {
     // FIXME: should avoid using CriticalSectionRawMutex as it disables USB
     // interrupts. ThreadModeRawMutex may be a possible alternative.
     trussed: &'static Mutex<CriticalSectionRawMutex, TrussedClient>,
-    clients: Mutex<CriticalSectionRawMutex, BTreeMap<Endpoint, Client>>,
+    clients: Mutex<
+        CriticalSectionRawMutex,
+        BTreeMap<Endpoint, (Instant, Arc<Mutex<CriticalSectionRawMutex, Client>>)>,
+    >,
     certmgr: Mutex<CriticalSectionRawMutex, CertMgr>,
     token_provisioned: AtomicBool,
 }
@@ -105,8 +110,9 @@ async fn main() {
     macro_rules! handle {
         ($handler:expr) => {
             |req: Request<Endpoint>| async {
-                handle_client(req.original.source.unwrap(), state).await;
-                ($handler)(req, state).await
+                let endpoint = req.original.source.unwrap();
+                let client = handle_client(endpoint, state).await;
+                ($handler)(req, state, client).await
             }
         };
     }
@@ -129,6 +135,7 @@ async fn main() {
                 app::resource("/api/v1/admin/provision_complete").post(handle!(
                     server::token_provisioning::token_provision_complete
                 )),
+                app::resource("/api/v1/nonce").get(handle!(server::generate_nonce)),
             ]),
         util::rng::TrussedRng::new(trussed),
     );
@@ -150,8 +157,9 @@ async fn main() {
 // TODO: actually, this could be easily spawned onto executor
 async fn remove_clients(state: &ServerState) {
     let mut clients = state.clients.lock().await;
+
     clients.drain_filter(|k, v| {
-        if Instant::now().duration_since(v.last_activity) > CLIENT_TIMEOUT {
+        if Instant::now().duration_since(v.0) > CLIENT_TIMEOUT {
             info!("disconnect client: {:?}", k);
             true
         } else {
@@ -160,17 +168,19 @@ async fn remove_clients(state: &ServerState) {
     });
 }
 
-async fn handle_client(ep: Endpoint, state: &ServerState) {
+async fn handle_client(
+    ep: Endpoint,
+    state: &ServerState,
+) -> Arc<Mutex<CriticalSectionRawMutex, Client>> {
     let mut clients = state.clients.lock().await;
     if let Some(client) = clients.get_mut(&ep) {
-        client.last_activity = Instant::now();
+        client.0 = Instant::now();
+        Arc::clone(&client.1)
     } else {
         info!("new client: {:?}", ep);
-        clients.insert(
-            ep,
-            Client {
-                last_activity: Instant::now(),
-            },
-        );
+        let client = Arc::new(Mutex::new(Client { nonce: None }));
+        let client_2 = Arc::clone(&client);
+        clients.insert(ep, (Instant::now(), client));
+        client_2
     }
 }

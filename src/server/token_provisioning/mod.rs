@@ -1,7 +1,9 @@
 use core::sync::atomic::Ordering;
 
+use alloc::sync::Arc;
 use coap_lite::ContentFormat;
 use coap_server::app::{CoapError, Request, Response};
+use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use trussed::{
     api::reply::SerializeKey,
     types::{KeyId, KeySerialization, Location, Mechanism},
@@ -18,7 +20,7 @@ use crate::{
         },
         crypto::Ed25519Key,
     },
-    ServerState,
+    Client, ServerState,
 };
 
 mod csr;
@@ -175,6 +177,7 @@ where
 pub async fn token_provision_certchain(
     request: Request<Endpoint>,
     state: &ServerState,
+    _client: Arc<Mutex<CriticalSectionRawMutex, Client>>,
 ) -> Result<Response, CoapError> {
     if !request.unmatched_path.is_empty() || state.token_provisioned.load(Ordering::SeqCst) {
         return Err(CoapError::not_found());
@@ -209,6 +212,7 @@ pub async fn token_provision_certchain(
 pub async fn token_provision_complete(
     request: Request<Endpoint>,
     state: &ServerState,
+    _client: Arc<Mutex<CriticalSectionRawMutex, Client>>,
 ) -> Result<Response, CoapError> {
     if !request.unmatched_path.is_empty() || state.token_provisioned.load(Ordering::SeqCst) {
         return Err(CoapError::not_found());
