@@ -2,6 +2,8 @@ use alloc::{string::String, vec::Vec};
 use core::{fmt, marker::PhantomData};
 use serde::{Deserialize, Serialize};
 
+use crate::util::ObjectId;
+
 pub const CURRENT_VERSION: u8 = 1;
 
 pub struct MacAddress(pub [u8; 6]);
@@ -429,6 +431,21 @@ pub struct QuoteRequest<'a> {
 pub struct CertChain<'a> {
     #[serde(borrow)]
     pub certs: ArrayOf<'a, &'a serde_bytes::Bytes>,
+}
+
+#[derive(Deserialize)]
+pub struct Aik<'a> {
+    #[serde(with = "serde_bytes")]
+    pub aik: &'a [u8],
+    pub ek: ObjectId,
+}
+
+#[derive(Deserialize)]
+pub struct CredentialActivationResult<'a> {
+    pub ek: u32,
+    pub aik: u32,
+    #[serde(with = "serde_bytes")]
+    pub secret: &'a [u8],
 }
 
 #[cfg(test)]

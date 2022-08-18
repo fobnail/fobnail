@@ -40,6 +40,7 @@ use pal::embassy_util::{select, Either, Forever};
 use trussed::ClientImplementation;
 use udp::Endpoint;
 use util::provisioning::is_token_provisioned;
+use util::rng::TrussedRng;
 use util::signing::Nonce;
 
 mod certmgr;
@@ -56,6 +57,7 @@ type TrussedClient = ClientImplementation<pal::trussed::Syscall>;
 
 pub struct Client {
     nonce: Option<Nonce>,
+    provisioning: server::provisioning::Data,
 }
 
 pub struct ServerState {
@@ -68,6 +70,7 @@ pub struct ServerState {
     >,
     certmgr: Mutex<CriticalSectionRawMutex, CertMgr>,
     token_provisioned: AtomicBool,
+    rng: TrussedRng<CriticalSectionRawMutex, TrussedClient>,
 }
 
 #[pal::main]
@@ -105,6 +108,7 @@ async fn main() {
         clients: Mutex::new(Default::default()),
         certmgr: Mutex::new(CertMgr::new()),
         token_provisioned,
+        rng: util::rng::TrussedRng::new(trussed),
     });
 
     macro_rules! handle {
@@ -136,8 +140,14 @@ async fn main() {
                     server::token_provisioning::token_provision_complete
                 )),
                 app::resource("/api/v1/nonce").get(handle!(server::generate_nonce)),
+                app::resource("/api/v1/admin/provision/ek")
+                    .post(handle!(server::provisioning::process_ek)),
+                app::resource("/api/v1/admin/provision/aik")
+                    .post(handle!(server::provisioning::process_aik)),
+                app::resource("/api/v1/admin/provision")
+                    .post(handle!(server::provisioning::main_handler)),
             ]),
-        util::rng::TrussedRng::new(trussed),
+        state.rng.clone(),
     );
     futures_util::pin_mut!(server);
     loop {
@@ -178,7 +188,10 @@ async fn handle_client(
         Arc::clone(&client.1)
     } else {
         info!("new client: {:?}", ep);
-        let client = Arc::new(Mutex::new(Client { nonce: None }));
+        let client = Arc::new(Mutex::new(Client {
+            nonce: None,
+            provisioning: Default::default(),
+        }));
         let client_2 = Arc::clone(&client);
         clients.insert(ep, (Instant::now(), client));
         client_2
