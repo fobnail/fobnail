@@ -5,6 +5,11 @@ use coap_lite::{
 use coap_server::app::{CoapError, Request, Response};
 use serde::Deserialize;
 
+use super::{
+    crypto,
+    signing::{decode_signed_object, Nonce},
+};
+
 fn assert_content_format<Endpoint>(
     request: &CoapRequest<Endpoint>,
     format: ContentFormat,
@@ -41,6 +46,25 @@ where
         error!("CBOR request deserialization failed: {}", e);
         CoapError::bad_request("CBOR decode failed")
     })
+}
+
+pub fn decode_signed_cbor_req<'a: 'de, 'de, T, D, Endpoint>(
+    request: &'a CoapRequest<Endpoint>,
+    trussed: &mut T,
+    key: &crypto::Key,
+    nonce: &Nonce,
+) -> Result<(D, &'a [u8]), CoapError>
+where
+    T: trussed::client::CryptoClient,
+    D: Deserialize<'de> + 'a,
+{
+    assert_content_format(request, ContentFormat::ApplicationCBOR)?;
+
+    // FIXME: this will return 4.03 if object can't be deserialized. 4.03 should
+    // be returned only on signature verification failure, if either inner or
+    // outer can't be deserialized 4.00 should be returned instead.
+    decode_signed_object::<_, D>(trussed, &request.message.payload, key, nonce)
+        .map_err(|()| CoapError::bad_request("CBOR decode failed"))
 }
 
 pub fn get_raw_payload<Endpoint>(request: &CoapRequest<Endpoint>) -> Result<&[u8], CoapError> {

@@ -8,7 +8,7 @@ use crate::{
 pub fn load<T>(
     trussed: &mut T,
     certmgr: &mut CertMgr,
-    chain: &[u8],
+    chain: proto::CertChain,
 ) -> Result<X509Certificate<'static>, ()>
 where
     T: trussed::client::FilesystemClient + trussed::client::Sha256,
@@ -18,9 +18,6 @@ where
     const MIN_CERTS: usize = 1;
     /// Max number of certificates allowed in a chain.
     const MAX_CERTS: usize = 2;
-
-    let chain = trussed::cbor_deserialize::<proto::CertChain>(chain)
-        .map_err(|e| error!("Failed to deserialize EK certchain: {}", e))?;
 
     let num_certs = chain.certs.len();
     if !matches!(num_certs, MIN_CERTS..=MAX_CERTS) {

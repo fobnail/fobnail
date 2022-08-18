@@ -5,6 +5,7 @@ use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mut
 use crate::{udp::Endpoint, util::signing, Client, ServerState};
 
 pub mod proto;
+pub mod provisioning;
 pub mod token_provisioning;
 
 pub async fn generate_nonce(

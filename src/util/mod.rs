@@ -1,5 +1,11 @@
-use alloc::string::String;
+use alloc::{
+    collections::{BTreeMap, LinkedList},
+    string::{String, ToString},
+};
+use coap_lite::{option_value::OptionValueString, CoapOption};
+use coap_server::app::{Request, Response};
 use core::fmt;
+use rand_core::RngCore;
 
 pub mod coap;
 pub mod crypto;
@@ -21,4 +27,21 @@ impl fmt::Display for HexFormatter<'_> {
 
 pub fn format_hex(data: &[u8]) -> String {
     format!("{}", HexFormatter(data))
+}
+
+pub type ObjectId = u32;
+pub fn create_object<R: RngCore, T, Endpoint>(
+    request: &Request<Endpoint>,
+    map: &mut BTreeMap<ObjectId, T>,
+    object: T,
+    rng: &mut R,
+) -> Response {
+    let rand = rng.next_u32();
+    assert!(map.insert(rand, object).is_none());
+    let mut r = request.new_response();
+    r.message.set_options_as(
+        CoapOption::LocationPath,
+        LinkedList::from([OptionValueString(rand.to_string())]),
+    );
+    r
 }
