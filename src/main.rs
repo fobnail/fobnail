@@ -94,7 +94,7 @@ async fn main() {
     let token_provisioned = is_token_provisioned(&mut *trussed.lock().await).into();
 
     static STATE: Forever<ServerState> = Forever::new();
-    let state = STATE.put(ServerState {
+    let state: &'static ServerState = STATE.put(ServerState {
         trussed,
         // TODO: Default could be implemented for embassy Mutex
         clients: Mutex::new(Default::default()),
@@ -114,7 +114,12 @@ async fn main() {
     let mut purger = Ticker::every(CLIENT_PURGE_INTERVAL);
     let server = server.serve(
         app::new()
-            .ping_handler(|ep| info!("PING from {:?}", ep))
+            .ping_handler(move |ep| {
+                let state = state;
+                async move {
+                    handle_client(ep, state).await;
+                }
+            })
             .not_discoverable()
             .block_transfer()
             .resources(vec![
