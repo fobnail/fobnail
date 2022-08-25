@@ -8,6 +8,7 @@ use crate::{
     Client, ServerState,
 };
 
+pub mod attestation;
 pub mod proto;
 pub mod provisioning;
 pub mod token_provisioning;
