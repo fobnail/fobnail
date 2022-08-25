@@ -1,5 +1,6 @@
 use core::sync::atomic::Ordering;
 
+use coap_lite::ContentFormat;
 use coap_server::app::{CoapError, Request, Response};
 use trussed::{
     api::reply::SerializeKey,
@@ -11,8 +12,11 @@ use crate::{
     server::{proto, token_provisioning::csr::make_csr},
     udp::Endpoint,
     util::{
+        coap::{
+            decode_cbor_req, get_raw_payload, response_empty, response_with_payload,
+            verify_response_content_format,
+        },
         crypto::Ed25519Key,
-        req::{decode_cbor_req, get_raw_payload},
     },
     ServerState,
 };
@@ -176,6 +180,7 @@ pub async fn token_provision_certchain(
         return Err(CoapError::not_found());
     }
 
+    verify_response_content_format(&request, ContentFormat::ApplicationOctetStream)?;
     let chain = decode_cbor_req(&request.original)?;
 
     info!("Commencing token provisioning");
@@ -198,9 +203,7 @@ pub async fn token_provision_certchain(
         CoapError::internal("Internal error")
     })?;
 
-    let mut response = request.new_response();
-    response.message.payload = csr;
-    Ok(response)
+    Ok(response_with_payload(&request, csr))
 }
 
 pub async fn token_provision_complete(
@@ -222,5 +225,5 @@ pub async fn token_provision_complete(
     info!("Token provisioning complete");
     state.token_provisioned.store(true, Ordering::SeqCst);
 
-    Ok(request.new_response())
+    Ok(response_empty(&request))
 }

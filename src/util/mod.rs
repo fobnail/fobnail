@@ -1,10 +1,10 @@
 use alloc::string::String;
 use core::fmt;
 
+pub mod coap;
 pub mod crypto;
 pub mod policy;
 pub mod provisioning;
-pub mod req;
 pub mod rng;
 pub mod signing;
 pub mod tpm;
