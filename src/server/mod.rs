@@ -2,7 +2,11 @@ use alloc::sync::Arc;
 use coap_server::app::{CoapError, Request, Response};
 use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 
-use crate::{udp::Endpoint, util::signing, Client, ServerState};
+use crate::{
+    udp::Endpoint,
+    util::{coap::response_with_payload, signing},
+    Client, ServerState,
+};
 
 pub mod proto;
 pub mod provisioning;
@@ -23,7 +27,5 @@ pub async fn generate_nonce(
     };
 
     client.lock().await.nonce = Some(nonce);
-    let mut response = request.new_response();
-    response.message.payload = nonce.to_vec();
-    Ok(response)
+    Ok(response_with_payload(&request, nonce.to_vec()))
 }
