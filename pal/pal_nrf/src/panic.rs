@@ -4,6 +4,8 @@ fn panic(i: &core::panic::PanicInfo) -> ! {
 
     if let Some(location) = i.location() {
         rprintln!("@ {}:{}", location.file(), location.line());
+    } else {
+        rprintln!("@ <unknown location>");
     }
     rprintln!("");
 
