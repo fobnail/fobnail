@@ -55,9 +55,11 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 
 type TrussedClient = ClientImplementation<pal::trussed::Syscall>;
 
+#[derive(Default)]
 pub struct Client {
     nonce: Option<Nonce>,
     provisioning: server::provisioning::Data,
+    attestation: server::attestation::Data,
 }
 
 pub struct ServerState {
@@ -146,6 +148,7 @@ async fn main() {
                     .post(handle!(server::provisioning::process_aik)),
                 app::resource("/api/v1/admin/provision")
                     .post(handle!(server::provisioning::main_handler)),
+                app::resource("/api/v1/attest").post(handle!(server::attestation::attest)),
             ]),
         state.rng.clone(),
     );
@@ -188,10 +191,7 @@ async fn handle_client(
         Arc::clone(&client.1)
     } else {
         info!("new client: {:?}", ep);
-        let client = Arc::new(Mutex::new(Client {
-            nonce: None,
-            provisioning: Default::default(),
-        }));
+        let client = Arc::new(Mutex::new(Client::default()));
         let client_2 = Arc::clone(&client);
         clients.insert(ep, (Instant::now(), client));
         client_2

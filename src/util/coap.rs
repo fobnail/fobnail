@@ -10,7 +10,7 @@ use super::{
     signing::{decode_signed_object, Nonce},
 };
 
-fn assert_content_format<Endpoint>(
+pub fn assert_content_format<Endpoint>(
     request: &CoapRequest<Endpoint>,
     format: ContentFormat,
 ) -> Result<(), CoapError> {
