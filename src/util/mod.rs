@@ -7,6 +7,8 @@ use coap_server::app::{Request, Response};
 use core::fmt;
 use rand_core::RngCore;
 
+use crate::util::coap::response_empty;
+
 pub mod coap;
 pub mod crypto;
 pub mod policy;
@@ -38,7 +40,7 @@ pub fn create_object<R: RngCore, T, Endpoint>(
 ) -> Response {
     let rand = rng.next_u32();
     assert!(map.insert(rand, object).is_none());
-    let mut r = request.new_response();
+    let mut r = response_empty(&request);
     r.message.set_options_as(
         CoapOption::LocationPath,
         LinkedList::from([OptionValueString(rand.to_string())]),
