@@ -13,7 +13,9 @@ use crate::{
     certmgr::X509Certificate,
     udp::Endpoint,
     util::{
-        coap::{decode_cbor_req, decode_signed_cbor_req},
+        coap::{
+            decode_cbor_req, decode_signed_cbor_req, response_empty, verify_response_content_format,
+        },
         create_object, crypto, format_hex,
         signing::Nonce,
         tpm, HexFormatter, ObjectId,
@@ -88,6 +90,8 @@ pub async fn process_aik(
     if !request.unmatched_path.is_empty() || !state.token_provisioned.load(Ordering::SeqCst) {
         return Err(CoapError::not_found());
     }
+
+    verify_response_content_format(&request, ContentFormat::ApplicationCBOR)?;
 
     let mut client = client.lock().await;
     let proto::Aik { aik, ek: ek_id } = decode_cbor_req(&request.original)?;
@@ -189,7 +193,7 @@ async fn pc_process_meta(
     info!("  Product      : {}", metadata.product_name);
     info!("  Serial       : {}", metadata.serial_number);
 
-    let mut response = request.new_response();
+    let mut response = response_empty(&request);
     if pc.metadata.replace(raw_metadata.to_vec()).is_some() {
         response.set_status(ResponseType::Changed);
     }
@@ -233,7 +237,7 @@ async fn pc_process_rim(
         }
     }
 
-    let mut response = request.new_response();
+    let mut response = response_empty(&request);
     if pc.rim.replace(raw_rim.to_vec()).is_some() {
         response.set_status(ResponseType::Changed);
     }
@@ -294,7 +298,7 @@ async fn pc_complete(
     info!("Wrote {}", path_str);
     info!("Provisioning is complete");
 
-    let mut response = request.new_response();
+    let mut response = response_empty(&request);
     response.set_status(ResponseType::Changed);
     Ok(response)
 }
