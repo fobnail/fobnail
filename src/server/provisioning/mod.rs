@@ -4,8 +4,10 @@ use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use coap_lite::{ContentFormat, ResponseType};
 use coap_server::app::{CoapError, Request, Response};
 use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use rsa::PublicKeyParts;
 use trussed::{
     client::{CryptoClient, FilesystemClient},
+    config::MAX_MESSAGE_LENGTH,
     types::{Location, Mechanism, Message, PathBuf},
 };
 
@@ -269,7 +271,7 @@ async fn pc_complete(
         CoapError::internal("Internal error")
     })?;
     let meta_dir = PathBuf::from(b"/meta/");
-    let path_str = format!("/meta/{}", metadata_hash);
+    let path_str = format!("/meta/{}_aik", metadata_hash);
 
     if trussed::try_syscall!(trussed.locate_file(
         Location::Internal,
@@ -286,6 +288,37 @@ async fn pc_complete(
         return Err(CoapError::forbidden());
     }
 
+    let serialized = match &pc.aik {
+        crypto::Key::Rsa(rsa) => {
+            let e_v = rsa.inner.e().to_bytes_be();
+            let mut e_a = [0u8; 4];
+            if !e_v.is_empty() {
+                e_a[4 - e_v.len()..].copy_from_slice(&e_v);
+            }
+            let e = u32::from_be_bytes(e_a);
+
+            let key = proto::PersistentRsaKey {
+                n: &rsa.inner.n().to_bytes_be()[..],
+                e,
+            };
+            trussed::cbor_serialize_bytes::<_, MAX_MESSAGE_LENGTH>(&key).unwrap()
+        }
+        crypto::Key::Ed25519(_) => {
+            error!("Platform provisioning with Ed25519 keys is not supported");
+            return Err(CoapError::internal("Internal error"));
+        }
+    };
+
+    let aik = Message::from_slice(&serialized).unwrap();
+    let path = PathBuf::from(path_str.as_str());
+    trussed::try_syscall!(trussed.write_file(Location::Internal, path, aik, None)).map_err(
+        |e| {
+            error!("Failed to save AIK: {:?}", e);
+            CoapError::internal("Internal error")
+        },
+    )?;
+
+    let path_str = format!("/meta/{}", metadata_hash);
     let rim = Message::from_slice(rim).unwrap();
     let path = PathBuf::from(path_str.as_str());
     trussed::try_syscall!(trussed.write_file(Location::Internal, path, rim, None)).map_err(
