@@ -39,6 +39,19 @@ where
 
     trussed::cbor_deserialize(&request.message.payload).map_err(|e| {
         error!("CBOR request deserialization failed: {}", e);
+        error!("Hexdump of failed request:");
+        struct Formatter<'a>(&'a [u8]);
+        impl core::fmt::Display for Formatter<'_> {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                for x in self.0 {
+                    write!(f, "\\x{:02x}", *x)?;
+                }
+                Ok(())
+            }
+        }
+        for c in request.message.payload.chunks(16) {
+            error!("{}", Formatter(c));
+        }
         CoapError::bad_request("CBOR decode failed")
     })
 }
