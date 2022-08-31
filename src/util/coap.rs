@@ -1,6 +1,7 @@
 use alloc::{borrow::ToOwned, vec::Vec};
 use coap_lite::{
-    option_value::OptionValueU32, CoapOption, CoapRequest, ContentFormat, RequestType, ResponseType,
+    option_value::OptionValueU32, CoapOption, CoapRequest, CoapResponse, ContentFormat,
+    RequestType, ResponseType,
 };
 use coap_server::app::{CoapError, Request, Response};
 use serde::Deserialize;
@@ -76,13 +77,29 @@ pub fn is_response_cacheable<Endpoint>(request: &Request<Endpoint>) -> bool {
     request.original.get_method() == &RequestType::Get
 }
 
-pub fn response_empty<Endpoint>(request: &Request<Endpoint>) -> Response {
-    let mut resp = request.new_response();
+/// Implementation based on coap-server-rs, uses different defaults for response
+/// code and sets Max-Age if needed.
+fn create_response<Endpoint>(request: &Request<Endpoint>) -> Response {
+    let mut response = CoapResponse::new(&request.original.message)
+        .expect("cannot get a Request without an input message that can make a Response!");
+    response.message.payload = Vec::new();
+    let default_code = match &request.original.get_method() {
+        RequestType::Get => ResponseType::Content,
+        RequestType::Post | RequestType::Put => ResponseType::Created,
+        RequestType::Delete => ResponseType::Deleted,
+        _ => unimplemented!(),
+    };
+    response.set_status(default_code);
     if is_response_cacheable(&request) {
-        resp.message
+        response
+            .message
             .set_options_as(CoapOption::MaxAge, [OptionValueU32(0)].into());
     }
-    resp
+    response
+}
+
+pub fn response_empty<Endpoint>(request: &Request<Endpoint>) -> Response {
+    create_response(request)
 }
 
 pub fn verify_response_content_format<Endpoint>(
@@ -109,12 +126,7 @@ pub fn verify_response_content_format<Endpoint>(
 }
 
 pub fn response_with_payload<Endpoint>(request: &Request<Endpoint>, payload: Vec<u8>) -> Response {
-    let mut resp = request.new_response();
-    if is_response_cacheable(&request) {
-        resp.message
-            .set_options_as(CoapOption::MaxAge, [OptionValueU32(0)].into());
-    }
+    let mut resp = create_response(request);
     resp.message.payload = payload;
-
     resp
 }

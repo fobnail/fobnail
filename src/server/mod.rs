@@ -9,6 +9,7 @@ use crate::{
 };
 
 pub mod attestation;
+pub mod fts;
 pub mod proto;
 pub mod provisioning;
 pub mod token_provisioning;

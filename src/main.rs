@@ -149,6 +149,8 @@ async fn main() {
                 app::resource("/api/v1/admin/provision")
                     .post(handle!(server::provisioning::main_handler)),
                 app::resource("/api/v1/attest").post(handle!(server::attestation::attest)),
+                app::resource("/api/v1/storage/fs")
+                    .default_handler(handle!(server::fts::storage::handler)),
             ]),
         state.rng.clone(),
     );
