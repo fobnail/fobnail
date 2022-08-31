@@ -29,6 +29,20 @@ use crate::{
 #[derive(Default)]
 pub struct Data {
     acs: BTreeMap<ObjectId, AttestationContext>,
+    /// Hash of platform's metadata, used to identify attested platform. If platform
+    /// has not been attested yet (or failed attestation) this is empty.
+    metadata_hash: Vec<u8>,
+}
+
+impl Data {
+    #[inline(always)]
+    pub fn platform(&self) -> Option<&[u8]> {
+        if !self.metadata_hash.is_empty() {
+            Some(&self.metadata_hash)
+        } else {
+            None
+        }
+    }
 }
 
 pub struct AttestationContext {
@@ -36,6 +50,7 @@ pub struct AttestationContext {
     nonce: Nonce,
     policy: Policy,
     aik: crypto::Key<'static>,
+    metadata_hash: Vec<u8>,
 }
 
 /// Load AIK from internal storage.
@@ -263,7 +278,10 @@ pub async fn attest(
         match verify_evidence(&mut *trussed, evidence, ac).await {
             Ok(()) => {
                 info!("Attestation successful");
-                client.attestation.acs.remove(&ac_id);
+                client.attestation.metadata_hash =
+                    client.attestation.acs.remove(&ac_id).unwrap().metadata_hash;
+                debug_assert!(!client.attestation.metadata_hash.is_empty());
+
                 let mut response = response_empty(&request);
                 response.set_status(ResponseType::Changed);
                 return Ok(response);
@@ -280,10 +298,10 @@ pub async fn attest(
     let mut client = client.lock().await;
     let nonce = client.nonce.take().ok_or_else(CoapError::forbidden)?;
     let mut trussed = state.trussed.lock().await;
-    let hash = hash_signed_object(&mut *trussed, &request.original.message.payload)
+    let metadata_hash = hash_signed_object(&mut *trussed, &request.original.message.payload)
         .map_err(|()| CoapError::bad_request("Invalid CBOR"))?;
 
-    let aik = load_aik(&mut *trussed, &hash).map_err(|()| CoapError::not_found())?;
+    let aik = load_aik(&mut *trussed, &metadata_hash).map_err(|()| CoapError::not_found())?;
     let meta: proto::Metadata =
         decode_signed_cbor_req(&request.original, &mut *trussed, &aik, &nonce)
             .map(|(meta, _)| meta)?;
@@ -294,7 +312,7 @@ pub async fn attest(
     info!("  Product      : {}", meta.product_name);
     info!("  Serial       : {}", meta.serial_number);
 
-    let rim = load_rim(&mut *trussed, &hash).map_err(|()| CoapError::not_found())?;
+    let rim = load_rim(&mut *trussed, &metadata_hash).map_err(|()| CoapError::not_found())?;
     // TODO: policy should be loaded from
     // internal storage
     let policy = Policy::default();
@@ -319,6 +337,7 @@ pub async fn attest(
             nonce: quote_nonce,
             policy,
             aik,
+            metadata_hash: metadata_hash.to_vec(),
         },
         &mut state.rng.clone(),
     );
