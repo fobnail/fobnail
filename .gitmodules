@@ -19,3 +19,6 @@
 [submodule "external/lru_time_cache"]
 	path = external/lru_time_cache
 	url = https://github.com/maidsafe/lru_time_cache
+[submodule "external/cortex-mpu"]
+	path = external/cortex-mpu
+	url = https://github.com/fobnail/cortex-mpu

@@ -37,6 +37,7 @@ mod device_id;
 mod heap;
 pub mod led;
 mod logger;
+mod mpu;
 pub mod net;
 mod panic;
 pub mod timer;
@@ -55,6 +56,8 @@ pub fn init(spawner: Spawner) {
     rtt_target::rtt_init_print!();
     logger::init();
     heap::init();
+
+    unsafe { mpu::init_protection() };
 
     let periph = hal::pac::Peripherals::take().unwrap();
     let clocks = Clocks::new(periph.CLOCK);

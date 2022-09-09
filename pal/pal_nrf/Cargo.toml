@@ -39,6 +39,8 @@ pal_macros = { path = "../pal_macros", features=["nrf52840"] }
 # ! type, nRF hal still uses this
 void = { version = "1", default-features = false }
 
+cortex-mpu = { path = "../../external/cortex-mpu" }
+
 [dependencies.smoltcp]
 git = "https://github.com/smoltcp-rs/smoltcp"
 rev = "ed0cf16750a42f30e31fcaf5347915592924b1e3"
