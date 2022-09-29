@@ -3,13 +3,14 @@ use core::any::type_name;
 use crate::{server::proto::SignedObject, util::crypto};
 use rsa::PublicKey as _;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use trussed::types::Mechanism;
 
 pub const NONCE_SIZE: usize = 32;
 
 /// Verifies signature and returns contained raw data if signature is valid.
 pub fn verify_signed_object<'a, T>(
-    trussed: &mut T,
+    _trussed: &mut T,
     data: &'a [u8],
     signing_key: &crypto::Key,
     nonce: &[u8],
@@ -24,23 +25,22 @@ where
     // We expect SHA256 for RSA and SHA512 for Ed25519
     match signing_key {
         crypto::Key::Rsa(key) => {
-            let mut data_to_hash = trussed::Bytes::from_slice(signed_object.data)
-                .map_err(|_| error!("Data is too big and cannot be hashed"))?;
-            data_to_hash
-                .extend_from_slice(nonce)
-                .map_err(|_| error!("Data is too big and cannot be hashed"))?;
+            // FIXME: we can't use Trussed due to limitations of its IPC, we
+            // would have to allocate continuous buffer to hold all data we want
+            // to hash on stack causing excessive stack usage which may result
+            // in stack overflows.
+            let mut hasher = Sha256::new();
+            hasher.update(signed_object.data);
+            hasher.update(nonce);
+            let hash = hasher.finalize();
 
-            let sha = trussed::try_syscall!(trussed.hash(Mechanism::Sha256, data_to_hash))
-                .map_err(|e| {
-                    error!("Failed to compute SHA-256: {:?}", e);
-                })?;
             // Currently, Trussed does not provide RSA support so we use
             // rsa crate directly.
             match key.inner.verify(
                 rsa::PaddingScheme::PKCS1v15Sign {
                     hash: Some(rsa::Hash::SHA2_256),
                 },
-                &sha.hash,
+                &hash,
                 signed_object.signature,
             ) {
                 Ok(()) => Ok(signed_object.data),

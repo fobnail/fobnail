@@ -2,7 +2,7 @@ use core::{marker::PhantomData, mem::forget};
 
 use trussed::{
     api::reply::{Exists, GenerateKey, ReadFile},
-    config::MAX_MESSAGE_LENGTH,
+    config::MAX_FILE_LENGTH,
     types::{KeyId, Location, Mechanism, PathBuf, StorageAttributes},
 };
 
@@ -96,7 +96,7 @@ impl<'a> Ed25519Key<'a> {
     where
         T: trussed::client::FilesystemClient,
     {
-        let key_serialized = trussed::cbor_serialize_bytes::<_, { MAX_MESSAGE_LENGTH }>(&self.id())
+        let key_serialized = trussed::cbor_serialize_bytes::<_, { MAX_FILE_LENGTH }>(&self.id())
             .map_err(|e| error!("Failed to serialize key ID: {}", e))?;
 
         let path_str = format!("/key_{}", name);

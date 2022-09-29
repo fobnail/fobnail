@@ -1,6 +1,6 @@
 use core::fmt;
 
-use trussed::types::{Location, Message, PathBuf};
+use trussed::types::{HugeMessage, Location, PathBuf};
 
 use super::{CertMgr, X509Certificate};
 
@@ -96,7 +96,7 @@ impl CertMgr {
         match trussed::try_syscall!(trussed.write_file(
             Location::Internal,
             PathBuf::from(path.as_bytes()),
-            Message::from_slice(cert_raw).map_err(|_| error!("Certificate is too big"))?,
+            HugeMessage::from_slice(cert_raw).map_err(|_| error!("Certificate is too big"))?,
             None,
         )) {
             Ok(_) => Ok(()),

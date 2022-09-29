@@ -2,7 +2,7 @@ use alloc::{sync::Arc, vec::Vec};
 use coap_lite::{RequestType, ResponseType};
 use coap_server::app::{CoapError, Request, Response};
 use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
-use trussed::types::{Location, Message, PathBuf};
+use trussed::types::{HugeMessage, Location, PathBuf};
 
 use crate::{
     udp::Endpoint,
@@ -91,7 +91,7 @@ where
     trussed::try_syscall!(trussed.write_file(
         Location::Internal,
         path,
-        Message::from_slice(data).map_err(|_| CoapError::internal("File is too big"))?,
+        HugeMessage::from_slice(data).map_err(|_| CoapError::internal("File is too big"))?,
         None
     ))
     .map_err(|_| {

@@ -7,8 +7,8 @@ use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mut
 use rsa::PublicKeyParts;
 use trussed::{
     client::{CryptoClient, FilesystemClient},
-    config::MAX_MESSAGE_LENGTH,
-    types::{Location, Mechanism, Message, PathBuf},
+    config::MAX_FILE_LENGTH,
+    types::{HugeMessage, Location, Mechanism, PathBuf},
 };
 
 use crate::{
@@ -223,11 +223,11 @@ async fn pc_process_rim(
         error!("RIM is invalid");
         CoapError::bad_request("Invalid RIM")
     })?;
-    if raw_rim.len() > trussed::config::MAX_MESSAGE_LENGTH {
+    if raw_rim.len() > trussed::config::MAX_FILE_LENGTH {
         error!(
             "RIM is too big: size exceeds MAX_MESSAGE_LENGTH ({} vs {})",
             raw_rim.len(),
-            trussed::config::MAX_MESSAGE_LENGTH
+            trussed::config::MAX_FILE_LENGTH
         );
         return Err(CoapError::bad_request("RIM too big"));
     }
@@ -288,7 +288,7 @@ async fn pc_complete(
         return Err(CoapError::forbidden());
     }
 
-    let serialized = match &pc.aik {
+    let aik = match &pc.aik {
         crypto::Key::Rsa(rsa) => {
             let e_v = rsa.inner.e().to_bytes_be();
             let mut e_a = [0u8; 4];
@@ -301,7 +301,7 @@ async fn pc_complete(
                 n: &rsa.inner.n().to_bytes_be()[..],
                 e,
             };
-            trussed::cbor_serialize_bytes::<_, MAX_MESSAGE_LENGTH>(&key).unwrap()
+            trussed::cbor_serialize_bytes::<_, MAX_FILE_LENGTH>(&key).unwrap()
         }
         crypto::Key::Ed25519(_) => {
             error!("Platform provisioning with Ed25519 keys is not supported");
@@ -309,7 +309,6 @@ async fn pc_complete(
         }
     };
 
-    let aik = Message::from_slice(&serialized).unwrap();
     let path = PathBuf::from(path_str.as_str());
     trussed::try_syscall!(trussed.write_file(Location::Internal, path, aik, None)).map_err(
         |e| {
@@ -319,7 +318,7 @@ async fn pc_complete(
     )?;
 
     let path_str = format!("/meta/{}", metadata_hash);
-    let rim = Message::from_slice(rim).unwrap();
+    let rim = HugeMessage::from_slice(rim).unwrap();
     let path = PathBuf::from(path_str.as_str());
     trussed::try_syscall!(trussed.write_file(Location::Internal, path, rim, None)).map_err(
         |e| {
