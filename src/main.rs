@@ -37,6 +37,7 @@ use futures_util::StreamExt;
 use pal::embassy_util::blocking_mutex::raw::CriticalSectionRawMutex;
 use pal::embassy_util::mutex::Mutex;
 use pal::embassy_util::{select, Either, Forever};
+use pal::led;
 use trussed::ClientImplementation;
 use udp::Endpoint;
 use util::provisioning::is_token_provisioned;
@@ -73,6 +74,9 @@ pub struct ServerState {
     certmgr: Mutex<CriticalSectionRawMutex, CertMgr>,
     token_provisioned: AtomicBool,
     rng: TrussedRng<CriticalSectionRawMutex, TrussedClient>,
+    /// Number of connected clients who passed attestation and have access to
+    /// Fobnail Token Services.
+    clients_with_fts_access: Mutex<CriticalSectionRawMutex, u32>,
 }
 
 #[pal::main]
@@ -102,6 +106,11 @@ async fn main() {
     .unwrap();
 
     let token_provisioned = is_token_provisioned(&mut *trussed.lock().await).into();
+    if token_provisioned {
+        led::control(led::LedState::TokenWaiting);
+    } else {
+        led::control(led::LedState::TokenNotProvisioned);
+    }
 
     static STATE: Forever<ServerState> = Forever::new();
     let state: &'static ServerState = STATE.put(ServerState {
@@ -109,8 +118,9 @@ async fn main() {
         // TODO: Default could be implemented for embassy Mutex
         clients: Mutex::new(Default::default()),
         certmgr: Mutex::new(CertMgr::new()),
-        token_provisioned,
+        token_provisioned: token_provisioned.into(),
         rng: util::rng::TrussedRng::new(trussed),
+        clients_with_fts_access: Mutex::new(0),
     });
 
     macro_rules! handle {
@@ -172,6 +182,20 @@ async fn main() {
 // TODO: actually, this could be easily spawned onto executor
 async fn remove_clients(state: &ServerState) {
     let mut clients = state.clients.lock().await;
+    let mut clients_with_fts_access = state.clients_with_fts_access.lock().await;
+
+    let np = *clients_with_fts_access;
+    let mut n = *clients_with_fts_access;
+
+    // drain_filter requires sync closure so we can't lock mutex from there.
+    for (_k, v) in clients.iter() {
+        if Instant::now().duration_since(v.0) > CLIENT_TIMEOUT {
+            let c = v.1.lock().await;
+            if c.attestation.platform().is_some() {
+                n -= 1;
+            }
+        }
+    }
 
     clients.drain_filter(|k, v| {
         if Instant::now().duration_since(v.0) > CLIENT_TIMEOUT {
@@ -181,6 +205,11 @@ async fn remove_clients(state: &ServerState) {
             false
         }
     });
+
+    *clients_with_fts_access = n;
+    if n == 0 && np > 0 {
+        led::control(led::LedState::TokenWaiting);
+    }
 }
 
 async fn handle_client(

@@ -3,7 +3,10 @@ use core::sync::atomic::Ordering;
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use coap_lite::{ContentFormat, ResponseType};
 use coap_server::app::{CoapError, Request, Response};
-use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use pal::{
+    embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex},
+    led,
+};
 use sha2::Digest;
 use trussed::{
     api::reply::ReadFile,
@@ -284,9 +287,15 @@ pub async fn attest(
 
                 let mut response = response_empty(&request);
                 response.set_status(ResponseType::Changed);
+
+                *state.clients_with_fts_access.lock().await += 1;
+                led::control(led::LedState::AttestationOk);
                 return Ok(response);
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                led::control(led::LedState::AttestationFailed);
+                return Err(e);
+            }
         }
     }
 

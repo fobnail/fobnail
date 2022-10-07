@@ -3,7 +3,10 @@ use core::sync::atomic::Ordering;
 use alloc::sync::Arc;
 use coap_lite::ContentFormat;
 use coap_server::app::{CoapError, Request, Response};
-use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use pal::{
+    embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex},
+    led,
+};
 use trussed::{
     api::reply::SerializeKey,
     types::{KeyId, KeySerialization, Location, Mechanism},
@@ -228,6 +231,11 @@ pub async fn token_provision_complete(
     verify_certificate(&mut *trussed, &mut certmgr, cert_raw, token_key.id())?;
     info!("Token provisioning complete");
     state.token_provisioned.store(true, Ordering::SeqCst);
+
+    // Execute 2 commands, LED controller will complete signaling provisioning
+    // completion before processing next command.
+    led::control(led::LedState::TokenProvisioningComplete);
+    led::control(led::LedState::TokenWaiting);
 
     Ok(response_empty(&request))
 }

@@ -3,7 +3,10 @@ use core::sync::atomic::Ordering;
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use coap_lite::{ContentFormat, ResponseType};
 use coap_server::app::{CoapError, Request, Response};
-use pal::embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use pal::{
+    embassy_util::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex},
+    led,
+};
 use rsa::PublicKeyParts;
 use trussed::{
     client::{CryptoClient, FilesystemClient},
@@ -329,6 +332,9 @@ async fn pc_complete(
 
     info!("Wrote {}", path_str);
     info!("Provisioning is complete");
+
+    led::control(led::LedState::PlatformProvisioningOk);
+    led::control(led::LedState::TokenWaiting);
 
     let mut response = response_empty(&request);
     response.set_status(ResponseType::Changed);
