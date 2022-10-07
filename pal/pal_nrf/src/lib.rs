@@ -85,6 +85,7 @@ pub fn init(spawner: Spawner) {
 
     // initialize LEDs
     led::init(
+        &spawner,
         port0.p0_06.into_push_pull_output(Level::High),
         port0.p0_08.into_push_pull_output(Level::High),
     );

@@ -1,10 +1,15 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Led {
-    Green,
-    Red,
+#[derive(Debug, PartialEq, Eq)]
+pub enum LedState {
+    Off,
+    TokenNotProvisioned,
+    TokenProvisioningComplete,
+    TokenWaiting,
+    PlatformProvisioningOk,
+    AttestationOk,
+    AttestationFailed,
 }
 
-pub fn control(_led: Led, _on: bool) {
+pub fn control(_state: LedState) {
     // since on PC there is no LED we could control this is no-op kept only to
     // uniform PAL interface between pal_nrf and pal_pc
 }
