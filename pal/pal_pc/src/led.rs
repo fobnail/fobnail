@@ -9,7 +9,9 @@ pub enum LedState {
     AttestationFailed,
 }
 
-pub fn control(_state: LedState) {
+pub fn control(state: LedState) {
     // since on PC there is no LED we could control this is no-op kept only to
     // uniform PAL interface between pal_nrf and pal_pc
+
+    log::info!("LED controller state: {:?}", state);
 }

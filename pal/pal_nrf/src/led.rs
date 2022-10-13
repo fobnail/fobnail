@@ -72,7 +72,7 @@ where
         self.cached_state = enable;
 
         if enable {
-            self.pin.set_low().unwrap()
+            self.pin.set_low().unwrap();
         } else {
             self.pin.set_high().unwrap();
         }
