@@ -294,6 +294,7 @@ pub async fn attest(
             }
             Err(e) => {
                 led::control(led::LedState::AttestationFailed);
+                led::control(led::LedState::TokenWaiting);
                 return Err(e);
             }
         }
