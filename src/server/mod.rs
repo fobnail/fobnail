@@ -8,6 +8,8 @@ use crate::{
     Client, ServerState,
 };
 
+use self::proto::SupportedApiVersions;
+
 pub mod attestation;
 pub mod fts;
 pub mod proto;
@@ -30,4 +32,22 @@ pub async fn generate_nonce(
 
     client.lock().await.nonce = Some(nonce);
     Ok(response_with_payload(&request, nonce.to_vec()))
+}
+
+pub async fn get_api_version(
+    request: Request<Endpoint>,
+    state: &ServerState,
+    client: Arc<Mutex<CriticalSectionRawMutex, Client>>,
+) -> Result<Response, CoapError> {
+    if !request.unmatched_path.is_empty() {
+        return Err(CoapError::not_found());
+    }
+
+    let payload = trussed::cbor_serialize_bytes::<_, 512>(&SupportedApiVersions { versions: &[1] })
+        .map_err(|e| {
+            error!("CBOR encode failed: {}", e);
+            CoapError::forbidden()
+        })?;
+
+    Ok(response_with_payload(&request, payload.to_vec()))
 }

@@ -145,6 +145,7 @@ async fn main() {
             .not_discoverable()
             .block_transfer()
             .resources(vec![
+                app::resource("/api/version").get(handle!(server::get_api_version)),
                 app::resource("/api/v1/admin/token_provision").post(handle!(
                     server::token_provisioning::token_provision_certchain
                 )),

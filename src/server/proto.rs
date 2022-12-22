@@ -448,6 +448,11 @@ pub struct CredentialActivationResult<'a> {
     pub secret: &'a [u8],
 }
 
+#[derive(Serialize)]
+pub struct SupportedApiVersions<'a> {
+    pub versions: &'a [u32],
+}
+
 #[cfg(test)]
 mod tests {
     use core::marker::PhantomData;
