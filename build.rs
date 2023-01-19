@@ -11,10 +11,14 @@ use walkdir::WalkDir;
 fn main() -> anyhow::Result<()> {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let root_path = env::var_os("FOBNAIL_PO_ROOT")
-        .ok_or_else(|| anyhow::Error::msg("FOBNAIL_PO_ROOT variable be must point to file containing PEM certificate to install as PO root"))?;
+        .ok_or_else(|| anyhow::Error::msg("FOBNAIL_PO_ROOT variable must point to file containing PEM certificate to install as PO root"))?;
     let ek_cert_path = env::var_os("FOBNAIL_EK_ROOT_DIR");
     // Additional root to install, used for testing Fobnail with TPM simulator.
     let extra_ek_root = env::var_os("FOBNAIL_EXTRA_EK_ROOT");
+
+    if ek_cert_path.is_none() && extra_ek_root.is_none() {
+        bail!("Either FOBNAIL_EK_ROOT_DIR or FOBNAIL_EXTRA_EK_ROOT variable must be set");
+    }
 
     println!("cargo:rerun-if-env-changed=FOBNAIL_PO_ROOT");
     println!("cargo:rerun-if-env-changed=FOBNAIL_EK_ROOT_DIR");
