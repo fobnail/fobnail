@@ -36,8 +36,8 @@ pub async fn generate_nonce(
 
 pub async fn get_api_version(
     request: Request<Endpoint>,
-    state: &ServerState,
-    client: Arc<Mutex<CriticalSectionRawMutex, Client>>,
+    _state: &ServerState,
+    _client: Arc<Mutex<CriticalSectionRawMutex, Client>>,
 ) -> Result<Response, CoapError> {
     if !request.unmatched_path.is_empty() {
         return Err(CoapError::not_found());
