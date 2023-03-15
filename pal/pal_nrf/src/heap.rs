@@ -56,14 +56,10 @@ fn oom_handler(layout: Layout) -> ! {
 
 pub fn init() {
     const RAM_TOP: usize = 0x20040000;
-    const HEAP_SIZE: usize = 65536;
 
     let base = cortex_m_rt::heap_start();
-    if base as usize + HEAP_SIZE > RAM_TOP {
-        panic!(
-            "Not enough memory for heap, overflowed by {} bytes",
-            base as usize + HEAP_SIZE - RAM_TOP
-        );
-    }
-    unsafe { ALLOCATOR.init(base as usize, HEAP_SIZE) };
+    let heap_size = RAM_TOP - (base as usize);
+
+    unsafe { ALLOCATOR.init(base as usize, heap_size) };
+    debug!("Created heap with size {}", heap_size);
 }
