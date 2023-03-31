@@ -81,22 +81,24 @@ pub struct ServerState {
 
 #[pal::main]
 async fn main() {
+    static TRUSSED: Forever<Mutex<CriticalSectionRawMutex, TrussedClient>> = Forever::new();
+    static RX_META: Forever<[PacketMetadata; 16]> = Forever::new();
+    static RX_BUFFER: Forever<[u8; 4096]> = Forever::new();
+    static TX_META: Forever<[PacketMetadata; 16]> = Forever::new();
+    static TX_BUFFER: Forever<[u8; 4096]> = Forever::new();
+    static STATE: Forever<ServerState> = Forever::new();
+
     info!("Hello from main");
     let mut clients = pal::trussed::init(&["fobnail"]);
 
-    static TRUSSED: Forever<Mutex<CriticalSectionRawMutex, TrussedClient>> = Forever::new();
     let trussed = TRUSSED.put(Mutex::new(clients.pop().unwrap()));
 
     let stack = pal::net::stack();
 
-    static RX_META: Forever<[PacketMetadata; 16]> = Forever::new();
-    let rx_meta = RX_META.put([PacketMetadata::EMPTY; 16]);
-    static RX_BUFFER: Forever<[u8; 4096]> = Forever::new();
-    let rx_buffer = RX_BUFFER.put([0; 4096]);
-    static TX_META: Forever<[PacketMetadata; 16]> = Forever::new();
-    let tx_meta = TX_META.put([PacketMetadata::EMPTY; 16]);
-    static TX_BUFFER: Forever<[u8; 4096]> = Forever::new();
-    let tx_buffer = TX_BUFFER.put([0; 4096]);
+    let rx_meta = RX_META.put_with(|| [PacketMetadata::EMPTY; 16]);
+    let rx_buffer = RX_BUFFER.put_with(|| [0; 4096]);
+    let tx_meta = TX_META.put_with(|| [PacketMetadata::EMPTY; 16]);
+    let tx_buffer = TX_BUFFER.put_with(|| [0; 4096]);
 
     let server = CoapServer::bind(udp::UdpTransport::new(
         UdpSocket::new(stack, rx_meta, rx_buffer, tx_meta, tx_buffer),
@@ -112,8 +114,7 @@ async fn main() {
         led::control(led::LedState::TokenNotProvisioned);
     }
 
-    static STATE: Forever<ServerState> = Forever::new();
-    let state: &'static ServerState = STATE.put(ServerState {
+    let state: &'static ServerState = STATE.put_with(|| ServerState {
         trussed,
         // TODO: Default could be implemented for embassy Mutex
         clients: Mutex::new(Default::default()),
