@@ -45,7 +45,7 @@ pub(crate) fn init(delay_timer: DelayTimer, freerunning_timer: hal::Timer<TIMER3
     // (prescaler 7). Readings will be converted to ms in software.
     //
     // freq = 16 MHz / 2^prescaler
-    // NOTE: when updaing prescaler make sure to update
+    // NOTE: when updating prescaler make sure to update
     // FREERUNNING_TIMER_FREQ_KHZ
     free.prescaler.write(|w| unsafe { w.prescaler().bits(7) });
     free.tasks_start.write(|w| w.tasks_start().set_bit());
