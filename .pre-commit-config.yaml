@@ -2,7 +2,7 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
+    rev: v4.5.0
     hooks:
       - id: check-added-large-files
       - id: check-merge-conflict
@@ -51,7 +51,7 @@ repos:
           #   args: ['--manifest-path', 'pal/pal_pc/Cargo.toml', '--', '-D', 'warnings']
 
   - repo: https://github.com/crate-ci/typos
-    rev: v1.15.0
+    rev: v1.19.0
     hooks:
       - id: typos
 
